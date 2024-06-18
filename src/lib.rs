@@ -1,10 +1,6 @@
 #![deny(rust_2018_idioms)]
 #![allow(
-    clippy::too_many_arguments,
     clippy::type_complexity,
-    clippy::upper_case_acronyms, // see https://github.com/rust-lang/rust-clippy/issues/6974
-    clippy::vec_init_then_push, // uses two different styles of initialization
-    clippy::box_default, // its ugly and outside of inner loops irrelevant
     clippy::result_large_err, // 288 bytes is our 'large' variant today, which is unlikely to be a performance problem
     clippy::arc_with_non_send_sync, // will get resolved as we move further into async
 )]
@@ -92,8 +88,6 @@ pub mod utils;
 
 #[cfg(test)]
 mod tests {
-    use rustup_macros::unit_test as test;
-
     use crate::{is_proxyable_tools, DUP_TOOLS, TOOLS};
 
     #[test]

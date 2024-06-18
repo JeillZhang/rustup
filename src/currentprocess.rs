@@ -1,12 +1,9 @@
 use std::env;
 use std::ffi::OsString;
 use std::fmt::Debug;
-use std::future::Future;
 use std::io;
-use std::panic;
+use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::sync::Once;
-use std::{cell::RefCell, io::IsTerminal};
 #[cfg(feature = "test")]
 use std::{
     collections::HashMap,
@@ -15,8 +12,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::{Context, Result};
 #[cfg(feature = "test")]
-use rand::{thread_rng, Rng};
+use tracing::subscriber::DefaultGuard;
+use tracing_subscriber::util::SubscriberInitExt;
 
 pub mod filesource;
 pub mod terminalsource;
@@ -26,7 +25,7 @@ pub mod terminalsource;
 pub enum Process {
     OSProcess(OSProcess),
     #[cfg(feature = "test")]
-    TestProcess(TestProcess),
+    TestProcess(TestContext),
 }
 
 impl Process {
@@ -45,6 +44,18 @@ impl Process {
             .and_then(|a| a.file_stem())
             .and_then(std::ffi::OsStr::to_str)
             .map(String::from)
+    }
+
+    pub(crate) fn home_dir(&self) -> Option<PathBuf> {
+        home::env::home_dir_with_env(self)
+    }
+
+    pub(crate) fn cargo_home(&self) -> Result<PathBuf> {
+        home::env::cargo_home_with_env(self).context("failed to determine cargo home")
+    }
+
+    pub(crate) fn rustup_home(&self) -> Result<PathBuf> {
+        home::env::rustup_home_with_env(self).context("failed to determine rustup home dir")
     }
 
     pub fn var(&self, key: &str) -> Result<String, env::VarError> {
@@ -113,15 +124,6 @@ impl Process {
             Process::TestProcess(p) => Ok(p.cwd.clone()),
         }
     }
-
-    #[cfg(test)]
-    fn id(&self) -> u64 {
-        match self {
-            Process::OSProcess(_) => std::process::id() as u64,
-            #[cfg(feature = "test")]
-            Process::TestProcess(p) => p.id,
-        }
-    }
 }
 
 impl home::env::Env for Process {
@@ -150,130 +152,6 @@ impl home::env::Env for Process {
     }
 }
 
-#[cfg(feature = "test")]
-impl From<TestProcess> for Process {
-    fn from(p: TestProcess) -> Self {
-        Self::TestProcess(p)
-    }
-}
-
-/// Obtain the current instance of CurrentProcess
-pub fn process() -> Process {
-    home_process()
-}
-
-/// Obtain the current instance of HomeProcess
-pub(crate) fn home_process() -> Process {
-    match PROCESS.with(|p| p.borrow().clone()) {
-        None => panic!("No process instance"),
-        Some(p) => p,
-    }
-}
-
-static HOOK_INSTALLED: Once = Once::new();
-
-/// Run a function in the context of a process definition.
-///
-/// If the function panics, the process definition *in that thread* is cleared
-/// by an implicitly installed global panic hook.
-pub fn with<F, R>(process: Process, f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    ensure_hook();
-
-    PROCESS.with(|p| {
-        if let Some(old_p) = &*p.borrow() {
-            panic!("current process already set {old_p:?}");
-        }
-        *p.borrow_mut() = Some(process);
-        let result = f();
-        *p.borrow_mut() = None;
-        result
-    })
-}
-
-fn ensure_hook() {
-    HOOK_INSTALLED.call_once(|| {
-        let orig_hook = panic::take_hook();
-        panic::set_hook(Box::new(move |info| {
-            clear_process();
-            orig_hook(info);
-        }));
-    });
-}
-
-/// Run a function in the context of a process definition and a tokio runtime.
-///
-/// The process state is injected into a thread-local in every work thread of
-/// the runtime, but this requires access to the runtime builder, so this
-/// function must be the one to create the runtime.
-pub fn with_runtime<'a, R>(
-    process: Process,
-    mut runtime_builder: tokio::runtime::Builder,
-    fut: impl Future<Output = R> + 'a,
-) -> R {
-    ensure_hook();
-
-    let start_process = process.clone();
-    let unpark_process = process.clone();
-    let runtime = runtime_builder
-        // propagate to blocking threads
-        .on_thread_start(move || {
-            // assign the process persistently to the thread local.
-            PROCESS.with(|p| {
-                if let Some(old_p) = &*p.borrow() {
-                    panic!("current process already set {old_p:?}");
-                }
-                *p.borrow_mut() = Some(start_process.clone());
-                // Thread exits will clear the process.
-            });
-        })
-        .on_thread_stop(move || {
-            PROCESS.with(|p| {
-                *p.borrow_mut() = None;
-            });
-        })
-        // propagate to async worker threads
-        .on_thread_unpark(move || {
-            // assign the process persistently to the thread local.
-            PROCESS.with(|p| {
-                if let Some(old_p) = &*p.borrow() {
-                    panic!("current process already set {old_p:?}");
-                }
-                *p.borrow_mut() = Some(unpark_process.clone());
-                // Thread exits will clear the process.
-            });
-        })
-        .on_thread_park(move || {
-            PROCESS.with(|p| {
-                *p.borrow_mut() = None;
-            });
-        })
-        .build()
-        .unwrap();
-
-    // The current thread doesn't get hooks run on it.
-    PROCESS.with(move |p| {
-        if let Some(old_p) = &*p.borrow() {
-            panic!("current process already set {old_p:?}");
-        }
-        *p.borrow_mut() = Some(process);
-        let result = runtime.block_on(fut);
-        *p.borrow_mut() = None;
-        result
-    })
-}
-
-/// Internal - for the panic hook only
-fn clear_process() {
-    PROCESS.with(|p| p.replace(None));
-}
-
-thread_local! {
-    pub(crate) static PROCESS: RefCell<Option<Process>> = const { RefCell::new(None) };
-}
-
 // ----------- real process -----------------
 
 #[derive(Clone, Debug)]
@@ -298,16 +176,11 @@ impl Default for OSProcess {
 }
 
 // ------------ test process ----------------
+
 #[cfg(feature = "test")]
-#[derive(Clone, Debug, Default)]
 pub struct TestProcess {
-    pub cwd: PathBuf,
-    pub args: Vec<String>,
-    pub vars: HashMap<String, String>,
-    pub id: u64,
-    pub stdin: filesource::TestStdinInner,
-    pub stdout: filesource::TestWriterInner,
-    pub stderr: filesource::TestWriterInner,
+    pub process: Process,
+    _guard: DefaultGuard, // guard is dropped at the end of the test
 }
 
 #[cfg(feature = "test")]
@@ -318,60 +191,70 @@ impl TestProcess {
         vars: HashMap<String, String>,
         stdin: &str,
     ) -> Self {
-        TestProcess {
+        Self::from(TestContext {
             cwd: cwd.as_ref().to_path_buf(),
             args: args.iter().map(|s| s.as_ref().to_string()).collect(),
             vars,
-            id: TestProcess::new_id(),
             stdin: Arc::new(Mutex::new(Cursor::new(stdin.to_string()))),
-            stdout: Arc::new(Mutex::new(Vec::new())),
-            stderr: Arc::new(Mutex::new(Vec::new())),
-        }
+            stdout: Arc::default(),
+            stderr: Arc::default(),
+        })
     }
 
-    fn new_id() -> u64 {
-        let low_bits: u64 = std::process::id() as u64;
-        let mut rng = thread_rng();
-        let high_bits = rng.gen_range(0..u32::MAX) as u64;
-        high_bits << 32 | low_bits
+    pub fn with_vars(vars: HashMap<String, String>) -> Self {
+        Self::from(TestContext {
+            vars,
+            ..Default::default()
+        })
     }
 
     /// Extracts the stdout from the process
-    pub fn get_stdout(&self) -> Vec<u8> {
-        self.stdout
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+    pub fn stdout(&self) -> Vec<u8> {
+        let tp = match &self.process {
+            Process::TestProcess(tp) => tp,
+            _ => unreachable!(),
+        };
+
+        tp.stdout.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Extracts the stderr from the process
-    pub fn get_stderr(&self) -> Vec<u8> {
-        self.stderr
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+    pub fn stderr(&self) -> Vec<u8> {
+        let tp = match &self.process {
+            Process::TestProcess(tp) => tp,
+            _ => unreachable!(),
+        };
+
+        tp.stderr.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::env;
-
-    use rustup_macros::unit_test as test;
-
-    use super::{process, with, TestProcess};
-
-    #[test]
-    fn test_instance() {
-        let proc = TestProcess::new(
-            env::current_dir().unwrap(),
-            &["foo", "bar", "baz"],
-            HashMap::default(),
-            "",
-        );
-        with(proc.clone().into(), || {
-            assert_eq!(proc.id, process().id(), "{:?} != {:?}", proc, process())
-        });
+#[cfg(feature = "test")]
+impl From<TestContext> for TestProcess {
+    fn from(inner: TestContext) -> Self {
+        let inner = Process::TestProcess(inner);
+        let guard = crate::cli::log::tracing_subscriber(&inner).set_default();
+        Self {
+            process: inner,
+            _guard: guard,
+        }
     }
+}
+
+#[cfg(feature = "test")]
+impl Default for TestProcess {
+    fn default() -> Self {
+        Self::from(TestContext::default())
+    }
+}
+
+#[cfg(feature = "test")]
+#[derive(Clone, Debug, Default)]
+pub struct TestContext {
+    pub cwd: PathBuf,
+    args: Vec<String>,
+    vars: HashMap<String, String>,
+    stdin: filesource::TestStdinInner,
+    stdout: filesource::TestWriterInner,
+    stderr: filesource::TestWriterInner,
 }

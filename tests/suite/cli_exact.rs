@@ -6,7 +6,6 @@ use rustup::test::{
     mock::clitools::{self, set_current_dist_date, with_update_server, Config, Scenario},
     this_host_triple,
 };
-use rustup_macros::integration_test as test;
 
 /// Start a test with Scenario::None
 fn test(f: &dyn Fn(&mut Config)) {
@@ -616,6 +615,27 @@ fn list_targets() {
 }
 
 #[test]
+fn list_targets_quiet() {
+    test(&|config| {
+        config.with_scenario(Scenario::SimpleV2, &|config| {
+            let trip = this_host_triple();
+            let mut sorted = [
+                trip,
+                clitools::CROSS_ARCH1.to_string(),
+                clitools::CROSS_ARCH2.to_string(),
+            ];
+            sorted.sort();
+
+            let expected = format!("{}\n{}\n{}\n", sorted[0], sorted[1], sorted[2]);
+
+            config.expect_ok(&["rustup", "default", "nightly"]);
+            config.expect_ok(&["rustup", "target", "add", clitools::CROSS_ARCH1]);
+            config.expect_ok_ex(&["rustup", "target", "list", "--quiet"], &expected, r"");
+        })
+    });
+}
+
+#[test]
 fn list_installed_targets() {
     test(&|config| {
         config.with_scenario(Scenario::SimpleV2, &|config| {
@@ -665,7 +685,7 @@ fn undefined_linked_toolchain() {
             config.expect_err_ex(
                 &["cargo", "+bogus", "test"],
                 r"",
-                "error: toolchain 'bogus' is not installable\n",
+                "error: toolchain 'bogus' is not installed\n",
             );
         })
     });

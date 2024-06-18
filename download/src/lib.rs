@@ -1,22 +1,20 @@
 //! Easy file downloading
 #![deny(rust_2018_idioms)]
 
+use std::fs::remove_file;
 use std::path::Path;
 
 use anyhow::Context;
 pub use anyhow::Result;
-use std::fs::remove_file;
+use thiserror::Error;
 use url::Url;
-
-mod errors;
-pub use crate::errors::*;
 
 /// User agent header value for HTTP request.
 /// See: https://github.com/rust-lang/rustup/issues/2860.
 #[cfg(feature = "curl-backend")]
 const CURL_USER_AGENT: &str = concat!("rustup/", env!("CARGO_PKG_VERSION"), " (curl)");
 
-#[cfg(feature = "reqwest-default-tls")]
+#[cfg(feature = "reqwest-native-tls")]
 const REQWEST_DEFAULT_TLS_USER_AGENT: &str = concat!(
     "rustup/",
     env!("CARGO_PKG_VERSION"),
@@ -36,7 +34,7 @@ pub enum Backend {
 #[derive(Debug, Copy, Clone)]
 pub enum TlsBackend {
     Rustls,
-    Default,
+    NativeTls,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -185,8 +183,7 @@ pub mod curl {
     use curl::easy::Easy;
     use url::Url;
 
-    use super::Event;
-    use crate::errors::*;
+    use super::{DownloadError, Event};
 
     pub fn download(
         url: &Url,
@@ -292,7 +289,7 @@ pub mod curl {
 pub mod reqwest_be {
     #[cfg(all(
         not(feature = "reqwest-rustls-tls"),
-        not(feature = "reqwest-default-tls")
+        not(feature = "reqwest-native-tls")
     ))]
     compile_error!("Must select a reqwest TLS backend");
 
@@ -300,15 +297,13 @@ pub mod reqwest_be {
     use std::time::Duration;
 
     use anyhow::{anyhow, Context, Result};
-    #[cfg(any(feature = "reqwest-rustls-tls", feature = "reqwest-default-tls"))]
+    #[cfg(any(feature = "reqwest-rustls-tls", feature = "reqwest-native-tls"))]
     use once_cell::sync::Lazy;
     use reqwest::{header, Client, ClientBuilder, Proxy, Response};
     use tokio_stream::StreamExt;
     use url::Url;
 
-    use super::Event;
-    use super::TlsBackend;
-    use crate::errors::*;
+    use super::{DownloadError, Event, TlsBackend};
 
     pub async fn download(
         url: &Url,
@@ -372,7 +367,7 @@ pub mod reqwest_be {
         catcher().unwrap()
     });
 
-    #[cfg(feature = "reqwest-default-tls")]
+    #[cfg(feature = "reqwest-native-tls")]
     static CLIENT_DEFAULT_TLS: Lazy<Client> = Lazy::new(|| {
         let catcher = || {
             client_generic()
@@ -405,10 +400,10 @@ pub mod reqwest_be {
             TlsBackend::Rustls => {
                 return Err(DownloadError::BackendUnavailable("reqwest rustls"));
             }
-            #[cfg(feature = "reqwest-default-tls")]
-            TlsBackend::Default => &CLIENT_DEFAULT_TLS,
-            #[cfg(not(feature = "reqwest-default-tls"))]
-            TlsBackend::Default => {
+            #[cfg(feature = "reqwest-native-tls")]
+            TlsBackend::NativeTls => &CLIENT_DEFAULT_TLS,
+            #[cfg(not(feature = "reqwest-native-tls"))]
+            TlsBackend::NativeTls => {
                 return Err(DownloadError::BackendUnavailable("reqwest default TLS"));
             }
         };
@@ -460,14 +455,32 @@ pub mod reqwest_be {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum DownloadError {
+    #[error("http request returned an unsuccessful status code: {0}")]
+    HttpStatus(u32),
+    #[error("file not found")]
+    FileNotFound,
+    #[error("download backend '{0}' unavailable")]
+    BackendUnavailable(&'static str),
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+    #[cfg(feature = "reqwest-backend")]
+    #[error(transparent)]
+    Reqwest(#[from] ::reqwest::Error),
+    #[cfg(feature = "curl-backend")]
+    #[error(transparent)]
+    CurlError(#[from] ::curl::Error),
+}
+
 #[cfg(not(feature = "curl-backend"))]
 pub mod curl {
-
     use anyhow::{anyhow, Result};
-
-    use super::Event;
-    use crate::errors::*;
     use url::Url;
+
+    use super::{DownloadError, Event};
 
     pub fn download(
         _url: &Url,
@@ -480,13 +493,10 @@ pub mod curl {
 
 #[cfg(not(feature = "reqwest-backend"))]
 pub mod reqwest_be {
-
     use anyhow::{anyhow, Result};
-
-    use super::Event;
-    use super::TlsBackend;
-    use crate::errors::*;
     use url::Url;
+
+    use super::{DownloadError, Event, TlsBackend};
 
     pub fn download(
         _url: &Url,

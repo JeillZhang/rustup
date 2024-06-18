@@ -1,12 +1,11 @@
 use std::io::{self, BufRead, Read, Result, Write};
 
 use super::terminalsource::{ColorableTerminal, StreamSelector};
-use crate::currentprocess::process;
+use crate::currentprocess::Process;
 
 /// Stand-in for std::io::Stdin
 pub trait Stdin {
     fn lock(&self) -> Box<dyn StdinLock + '_>;
-    fn read_line(&self, buf: &mut String) -> Result<usize>;
 }
 
 /// Stand-in for std::io::StdinLock
@@ -19,10 +18,6 @@ impl StdinLock for io::StdinLock<'_> {}
 impl Stdin for io::Stdin {
     fn lock(&self) -> Box<dyn StdinLock + '_> {
         Box::new(io::Stdin::lock(self))
-    }
-
-    fn read_line(&self, buf: &mut String) -> Result<usize> {
-        io::Stdin::read_line(self, buf)
     }
 }
 
@@ -40,10 +35,10 @@ pub trait Writer: Write + Send + Sync {
     /// Query whether a TTY is present. Used in download_tracker - we may want
     /// to remove this entirely with a better progress bar system (in favour of
     /// filtering in the Terminal layer?)
-    fn is_a_tty(&self) -> bool;
+    fn is_a_tty(&self, process: &Process) -> bool;
 
     /// Construct a terminal on this writer.
-    fn terminal(&self) -> ColorableTerminal;
+    fn terminal(&self, process: &Process) -> ColorableTerminal;
 }
 
 // ----------------- OS support for writers -----------------
@@ -51,8 +46,8 @@ pub trait Writer: Write + Send + Sync {
 impl WriterLock for io::StdoutLock<'_> {}
 
 impl Writer for io::Stdout {
-    fn is_a_tty(&self) -> bool {
-        match process() {
+    fn is_a_tty(&self, process: &Process) -> bool {
+        match process {
             crate::currentprocess::Process::OSProcess(p) => p.stdout_is_a_tty,
             #[cfg(feature = "test")]
             crate::currentprocess::Process::TestProcess(_) => unreachable!(),
@@ -63,16 +58,16 @@ impl Writer for io::Stdout {
         Box::new(io::Stdout::lock(self))
     }
 
-    fn terminal(&self) -> ColorableTerminal {
-        ColorableTerminal::new(StreamSelector::Stdout)
+    fn terminal(&self, process: &Process) -> ColorableTerminal {
+        ColorableTerminal::new(StreamSelector::Stdout, process)
     }
 }
 
 impl WriterLock for io::StderrLock<'_> {}
 
 impl Writer for io::Stderr {
-    fn is_a_tty(&self) -> bool {
-        match process() {
+    fn is_a_tty(&self, process: &Process) -> bool {
+        match process {
             crate::currentprocess::Process::OSProcess(p) => p.stderr_is_a_tty,
             #[cfg(feature = "test")]
             crate::currentprocess::Process::TestProcess(_) => unreachable!(),
@@ -83,8 +78,8 @@ impl Writer for io::Stderr {
         Box::new(io::Stderr::lock(self))
     }
 
-    fn terminal(&self) -> ColorableTerminal {
-        ColorableTerminal::new(StreamSelector::Stderr)
+    fn terminal(&self, process: &Process) -> ColorableTerminal {
+        ColorableTerminal::new(StreamSelector::Stderr, process)
     }
 }
 
@@ -133,9 +128,6 @@ mod test_support {
                 inner: self.0.lock().unwrap_or_else(|e| e.into_inner()),
             })
         }
-        fn read_line(&self, buf: &mut String) -> Result<usize> {
-            self.lock().read_line(buf)
-        }
     }
 
     // ----------------------- test support for writers ------------------
@@ -173,7 +165,7 @@ mod test_support {
     }
 
     impl Writer for TestWriter {
-        fn is_a_tty(&self) -> bool {
+        fn is_a_tty(&self, _: &Process) -> bool {
             false
         }
 
@@ -181,8 +173,8 @@ mod test_support {
             Box::new(self.lock())
         }
 
-        fn terminal(&self) -> ColorableTerminal {
-            ColorableTerminal::new(StreamSelector::TestWriter(self.clone()))
+        fn terminal(&self, process: &Process) -> ColorableTerminal {
+            ColorableTerminal::new(StreamSelector::TestWriter(self.clone()), process)
         }
     }
 

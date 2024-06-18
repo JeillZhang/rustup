@@ -1,16 +1,17 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{builder::PossibleValuesParser, Parser};
+use clap::Parser;
+use tracing::warn;
 
 use crate::{
     cli::{
         common,
         self_update::{self, InstallOpts},
     },
-    currentprocess::process,
-    dist::dist::Profile,
-    toolchain::names::MaybeOfficialToolchainName,
+    currentprocess::Process,
+    dist::Profile,
+    toolchain::MaybeOfficialToolchainName,
     utils::utils,
 };
 
@@ -43,12 +44,8 @@ struct RustupInit {
     #[arg(long)]
     default_toolchain: Option<MaybeOfficialToolchainName>,
 
-    #[arg(
-        long,
-        value_parser = PossibleValuesParser::new(Profile::names()),
-        default_value = Profile::default_name(),
-    )]
-    profile: String,
+    #[arg(long, value_enum, default_value_t)]
+    profile: Profile,
 
     /// Component name to also install
     #[arg(short, long, value_delimiter = ',', num_args = 1..)]
@@ -76,7 +73,7 @@ struct RustupInit {
 }
 
 #[cfg_attr(feature = "otel", tracing::instrument)]
-pub async fn main(current_dir: PathBuf) -> Result<utils::ExitCode> {
+pub async fn main(current_dir: PathBuf, process: &Process) -> Result<utils::ExitCode> {
     use clap::error::ErrorKind;
 
     let RustupInit {
@@ -95,22 +92,22 @@ pub async fn main(current_dir: PathBuf) -> Result<utils::ExitCode> {
     } = match RustupInit::try_parse() {
         Ok(args) => args,
         Err(e) if [ErrorKind::DisplayHelp, ErrorKind::DisplayVersion].contains(&e.kind()) => {
-            write!(process().stdout().lock(), "{e}")?;
+            write!(process.stdout().lock(), "{e}")?;
             return Ok(utils::ExitCode(0));
         }
         Err(e) => return Err(e.into()),
     };
 
     if self_replace {
-        return self_update::self_replace();
+        return self_update::self_replace(process);
     }
 
     if dump_testament {
-        common::dump_testament()?;
+        common::dump_testament(process)?;
         return Ok(utils::ExitCode(0));
     }
 
-    if &profile == "complete" {
+    if profile == Profile::Complete {
         warn!("{}", common::WARN_COMPLETE_PROFILE);
     }
 
@@ -124,5 +121,5 @@ pub async fn main(current_dir: PathBuf) -> Result<utils::ExitCode> {
         targets: &target.iter().map(|s| &**s).collect::<Vec<_>>(),
     };
 
-    self_update::install(current_dir, no_prompt, verbose, quiet, opts).await
+    self_update::install(current_dir, no_prompt, verbose, quiet, opts, process).await
 }

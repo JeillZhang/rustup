@@ -28,7 +28,7 @@ use crate::utils::{raw, utils};
 
 use super::{
     dist::{
-        change_channel_date, ManifestVersion, MockChannel, MockComponent, MockDistServer,
+        change_channel_date, MockChannel, MockComponent, MockDistServer, MockManifestVersion,
         MockPackage, MockTargetedPackage,
     },
     topical_doc_data, MockComponentBuilder, MockFile, MockInstallerBuilder,
@@ -725,30 +725,31 @@ impl Config {
                     .into_boxed_str(),
             );
         }
-        let tp = currentprocess::TestProcess::new(&*self.workdir.borrow(), &arg_strings, vars, "");
         let mut builder = Builder::new_multi_thread();
         builder
             .enable_all()
             .worker_threads(2)
             .max_blocking_threads(2);
-        let process_res = currentprocess::with_runtime(
-            tp.clone().into(),
-            builder,
-            rustup_mode::main(tp.cwd.clone()),
-        );
-        // convert Err's into an ec
-        let ec = match process_res {
-            Ok(process_res) => process_res,
-            Err(e) => {
-                currentprocess::with(tp.clone().into(), || crate::cli::common::report_error(&e));
-                utils::ExitCode(1)
+        let rt = builder.build().unwrap();
+        rt.block_on(async {
+            let tp =
+                currentprocess::TestProcess::new(&*self.workdir.borrow(), &arg_strings, vars, "");
+            let process_res =
+                rustup_mode::main(tp.process.current_dir().unwrap(), &tp.process).await;
+            // convert Err's into an ec
+            let ec = match process_res {
+                Ok(process_res) => process_res,
+                Err(e) => {
+                    crate::cli::common::report_error(&e, &tp.process);
+                    utils::ExitCode(1)
+                }
+            };
+            Output {
+                status: Some(ec.0),
+                stderr: tp.stderr(),
+                stdout: tp.stdout(),
             }
-        };
-        Output {
-            status: Some(ec.0),
-            stderr: tp.get_stderr(),
-            stdout: tp.get_stdout(),
-        }
+        })
     }
 
     #[track_caller]
@@ -1134,8 +1135,8 @@ fn create_mock_dist_server(path: &Path, s: Scenario) {
     let vs = match s {
         Scenario::None => unreachable!("None exits above"),
         Scenario::Empty => vec![],
-        Scenario::Full => vec![ManifestVersion::V1, ManifestVersion::V2],
-        Scenario::SimpleV1 | Scenario::ArchivesV1 => vec![ManifestVersion::V1],
+        Scenario::Full => vec![MockManifestVersion::V1, MockManifestVersion::V2],
+        Scenario::SimpleV1 | Scenario::ArchivesV1 => vec![MockManifestVersion::V1],
         Scenario::SimpleV2
         | Scenario::ArchivesV2
         | Scenario::ArchivesV2_2015_01_01
@@ -1148,7 +1149,7 @@ fn create_mock_dist_server(path: &Path, s: Scenario) {
         | Scenario::HostGoesMissingBefore
         | Scenario::HostGoesMissingAfter
         | Scenario::MissingComponent
-        | Scenario::MissingComponentMulti => vec![ManifestVersion::V2],
+        | Scenario::MissingComponentMulti => vec![MockManifestVersion::V2],
     };
 
     MockDistServer {

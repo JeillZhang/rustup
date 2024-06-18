@@ -7,7 +7,6 @@ use std::{env::consts::EXE_SUFFIX, path::Path};
 use rustup::for_host;
 use rustup::test::this_host_triple;
 use rustup::utils::raw;
-use rustup_macros::integration_test as test;
 
 use rustup::test::mock::{
     self,
@@ -842,6 +841,20 @@ fn list_default_toolchain() {
 }
 
 #[test]
+fn list_default_toolchain_quiet() {
+    test(&|config| {
+        config.with_scenario(Scenario::SimpleV2, &|config| {
+            config.expect_ok(&["rustup", "default", "nightly"]);
+            config.expect_ok_ex(
+                &["rustup", "toolchain", "list", "--quiet"],
+                for_host!("nightly-{0}\n"),
+                r"",
+            );
+        })
+    });
+}
+
+#[test]
 fn list_no_default_toolchain() {
     test(&|config| {
         config.with_scenario(Scenario::SimpleV2, &|config| {
@@ -1131,7 +1144,7 @@ active toolchain
 ----------------
 name: nightly-{0}
 compiler: 1.3.0 (hash-nightly-2)
-active because: overriden by environment variable RUSTUP_TOOLCHAIN
+active because: overridden by environment variable RUSTUP_TOOLCHAIN
 installed targets:
   {0}
 "
@@ -2052,7 +2065,7 @@ components = [ "rust-bongo" ]
 
             config.expect_stderr_ok(
                 &["rustc", "--version"],
-                "warning: Force-skipping unavailable component 'rust-bongo",
+                "warn: Force-skipping unavailable component 'rust-bongo",
             );
         })
     });
@@ -2437,7 +2450,7 @@ fn non_utf8_toolchain() {
                 [OsStr::from_bytes(b"+\xc3\x28")],
                 &[("RUST_BACKTRACE", "1")],
             );
-            assert!(out.stderr.contains("toolchain '�(' is not installable"));
+            assert!(out.stderr.contains("toolchain '�(' is not installed"));
         })
     });
 }
@@ -2456,7 +2469,7 @@ fn non_utf8_toolchain() {
                 [OsString::from_wide(&[u16::from(b'+'), 0xd801, 0xd801])],
                 &[("RUST_BACKTRACE", "1")],
             );
-            assert!(out.stderr.contains("toolchain '��' is not installable"));
+            assert!(out.stderr.contains("toolchain '��' is not installed"));
         })
     });
 }
@@ -2520,8 +2533,8 @@ fn warn_on_unmatch_build() {
         config.expect_stderr_ok(
             &["rustup", "toolchain", "install", &format!("nightly-{arch}")],
             &format!(
-                r"warning: toolchain 'nightly-{arch}' may not be able to run on this system.
-warning: If you meant to build software to target that platform, perhaps try `rustup target add {arch}` instead?",
+                r"warn: toolchain 'nightly-{arch}' may not be able to run on this system.
+warn: If you meant to build software to target that platform, perhaps try `rustup target add {arch}` instead?",
             ),
         );
         })
@@ -2547,7 +2560,7 @@ fn dont_warn_on_partial_build() {
                 r"info: syncing channel updates for 'nightly-{triple}'"
             )));
             assert!(!stderr.contains(&format!(
-                r"warning: toolchain 'nightly-{arch}' may not be able to run on this system."
+                r"warn: toolchain 'nightly-{arch}' may not be able to run on this system."
             )));
         })
     })
@@ -2600,7 +2613,7 @@ fn warn_on_duplicate_rust_toolchain_file() {
             config.expect_stderr_ok(
                 &["rustc", "--version"],
                 &format!(
-                    "warning: both `{0}` and `{1}` exist. Using `{0}`",
+                    "warn: both `{0}` and `{1}` exist. Using `{0}`",
                     toolchain_file_1.canonicalize().unwrap().display(),
                     toolchain_file_2.canonicalize().unwrap().display(),
                 ),

@@ -50,7 +50,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::dist::dist::{PartialToolchainDesc, TargetTriple, ToolchainDesc};
+use crate::dist::{PartialToolchainDesc, TargetTriple, ToolchainDesc};
 
 /// Errors related to toolchains
 #[derive(Error, Debug)]
@@ -248,7 +248,7 @@ impl Display for MaybeOfficialToolchainName {
 /// ToolchainName can be used in calls to Cfg that alter configuration,
 /// like setting overrides, or that depend on configuration, like calculating
 /// the toolchain directory.
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolchainName {
     Custom(CustomToolchainName),
     Official(ToolchainDesc),
@@ -353,7 +353,7 @@ impl Display for ResolvableLocalToolchainName {
 /// the toolchain directory. It is not used to model the RUSTUP_TOOLCHAIN
 /// variable, because that can take unresolved toolchain values that are not
 /// invalid for referring to an installed toolchain.
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LocalToolchainName {
     Named(ToolchainName),
     Path(PathBasedToolchainName),
@@ -491,53 +491,12 @@ mod tests {
     use proptest::{collection::vec, prelude::*, string::string_regex};
 
     use crate::{
-        dist::dist::PartialToolchainDesc,
+        dist::{
+            triple::known::{LIST_ARCHS, LIST_ENVS, LIST_OSES},
+            PartialToolchainDesc,
+        },
         toolchain::names::{CustomToolchainName, ResolvableToolchainName, ToolchainName},
     };
-
-    //Duplicated from triple.rs as a pragmatic step. TODO: remove duplication.
-    static LIST_ARCHS: &[&str] = &[
-        "i386",
-        "i586",
-        "i686",
-        "x86_64",
-        "arm",
-        "armv7",
-        "armv7s",
-        "aarch64",
-        "mips",
-        "mipsel",
-        "mips64",
-        "mips64el",
-        "powerpc",
-        "powerpc64",
-        "powerpc64le",
-        "riscv64gc",
-        "s390x",
-        "loongarch64",
-    ];
-    static LIST_OSES: &[&str] = &[
-        "pc-windows",
-        "unknown-linux",
-        "apple-darwin",
-        "unknown-netbsd",
-        "apple-ios",
-        "linux",
-        "rumprun-netbsd",
-        "unknown-freebsd",
-        "unknown-illumos",
-    ];
-    static LIST_ENVS: &[&str] = &[
-        "gnu",
-        "gnux32",
-        "msvc",
-        "gnueabi",
-        "gnueabihf",
-        "gnuabi64",
-        "androideabi",
-        "android",
-        "musl",
-    ];
 
     fn partial_toolchain_desc_re() -> String {
         let triple_re = format!(
