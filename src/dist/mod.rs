@@ -125,11 +125,11 @@ struct ParsedToolchainDesc {
     target: Option<String>,
 }
 
-// A toolchain descriptor from rustup's perspective. These contain
-// 'partial target triples', which allow toolchain names like
-// 'stable-msvc' to work. Partial target triples though are parsed
-// from a hardcoded set of known triples, whereas target triples
-// are nearly-arbitrary strings.
+/// A toolchain descriptor from rustup's perspective. These contain
+/// 'partial target triples', which allow toolchain names like
+/// 'stable-msvc' to work. Partial target triples though are parsed
+/// from a hardcoded set of known triples, whereas target triples
+/// are nearly-arbitrary strings.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct PartialToolchainDesc {
     pub channel: Channel,
@@ -137,11 +137,11 @@ pub struct PartialToolchainDesc {
     pub target: PartialTargetTriple,
 }
 
-// Fully-resolved toolchain descriptors. These always have full target
-// triples attached to them and are used for canonical identification,
-// such as naming their installation directory.
-//
-// as strings they look like stable-x86_64-pc-windows-msvc or
+/// Fully-resolved toolchain descriptors. These always have full target
+/// triples attached to them and are used for canonical identification,
+/// such as naming their installation directory.
+///
+/// As strings they look like stable-x86_64-pc-windows-msvc or
 /// 1.55-x86_64-pc-windows-msvc
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ToolchainDesc {
@@ -181,6 +181,8 @@ impl FromStr for Channel {
     }
 }
 
+/// A possibly incomplete Rust toolchain version that
+/// can be converted from and to its string form.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct PartialVersion {
     pub major: u64,
@@ -208,6 +210,17 @@ impl fmt::Display for PartialVersion {
 impl FromStr for PartialVersion {
     type Err = anyhow::Error;
     fn from_str(ver: &str) -> Result<Self> {
+        // `semver::Comparator::from_str` supports an optional operator
+        // (e.g. `=`, `>`, `>=`, `<`, `<=`, `~`, `^`, `*`) before the
+        // partial version, so we should exclude that case first.
+        if let Some(ch) = ver.chars().nth(0) {
+            if !ch.is_ascii_digit() {
+                return Err(anyhow!(
+                    "expected ASCII digit at the beginning of `{ver}`, found `{ch}`"
+                )
+                .context("error parsing `PartialVersion`"));
+            }
+        }
         let (ver, pre) = ver.split_once('-').unwrap_or((ver, ""));
         let comparator =
             semver::Comparator::from_str(ver).context("error parsing `PartialVersion`")?;
@@ -1192,6 +1205,8 @@ fn date_from_manifest_date(date_str: &str) -> Option<NaiveDate> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -1300,6 +1315,54 @@ mod tests {
             let tcd = ToolchainDesc::from_str(&full_tcn).unwrap();
             eprintln!("Considering {}", case.0);
             assert_eq!(tcd.is_tracking(), case.1);
+        }
+    }
+
+    #[test]
+    fn partial_version_from_str() -> Result<()> {
+        assert_eq!(
+            PartialVersion::from_str("0.12")?,
+            PartialVersion {
+                major: 0,
+                minor: Some(12),
+                patch: None,
+                pre: semver::Prerelease::EMPTY,
+            },
+        );
+        assert_eq!(
+            PartialVersion::from_str("1.23-beta")?,
+            PartialVersion {
+                major: 1,
+                minor: Some(23),
+                patch: None,
+                pre: semver::Prerelease::new("beta").unwrap(),
+            },
+        );
+        assert_eq!(
+            PartialVersion::from_str("1.23.0-beta.4")?,
+            PartialVersion {
+                major: 1,
+                minor: Some(23),
+                patch: Some(0),
+                pre: semver::Prerelease::new("beta.4").unwrap(),
+            },
+        );
+
+        assert!(PartialVersion::from_str("1.01").is_err()); // no leading zeros
+        assert!(PartialVersion::from_str("^1.23").is_err()); // no comparing operators
+        assert!(PartialVersion::from_str(">=1").is_err());
+        assert!(PartialVersion::from_str("*").is_err());
+        assert!(PartialVersion::from_str("stable").is_err());
+
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn partial_version_from_str_to_str(
+            ver in r"[0-9]{1}(\.(0|[1-9][0-9]{0,2}))(\.(0|[1-9][0-9]{0,1}))?(-beta(\.(0|[1-9][1-9]{0,1}))?)?"
+        ) {
+            prop_assert_eq!(PartialVersion::from_str(&ver).unwrap().to_string(), ver);
         }
     }
 
