@@ -10,9 +10,13 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
+use tracing::{info, warn};
 
 use crate::{
-    config::Cfg, currentprocess::Process, errors::RustupError, toolchain::ToolchainName,
+    config::{dist_root_server, Cfg},
+    currentprocess::Process,
+    errors::RustupError,
+    toolchain::ToolchainName,
     utils::utils,
 };
 
@@ -40,9 +44,6 @@ pub(crate) mod triple;
 pub(crate) use triple::*;
 
 pub static DEFAULT_DIST_SERVER: &str = "https://static.rust-lang.org";
-
-// Deprecated
-pub(crate) static DEFAULT_DIST_ROOT: &str = "https://static.rust-lang.org/dist";
 
 const TOOLSTATE_MSG: &str =
     "If you require these components, please install and use the latest successful build version,\n\
@@ -1155,9 +1156,7 @@ pub(crate) async fn dl_v2_manifest(
     {
         Ok(manifest_dl) => {
             // Downloaded ok!
-            let (manifest_file, manifest_hash) = if let Some(m) = manifest_dl {
-                m
-            } else {
+            let Some((manifest_file, manifest_hash)) = manifest_dl else {
                 return Ok(None);
             };
             let manifest_str = utils::read_file("manifest", &manifest_file)?;
@@ -1170,9 +1169,20 @@ pub(crate) async fn dl_v2_manifest(
             Ok(Some((manifest, manifest_hash)))
         }
         Err(any) => {
-            if let Some(RustupError::ChecksumFailed { .. }) = any.downcast_ref::<RustupError>() {
-                // Checksum failed - issue warning to try again later
-                (download.notify_handler)(Notification::ManifestChecksumFailedHack);
+            if let Some(err @ RustupError::ChecksumFailed { .. }) =
+                any.downcast_ref::<RustupError>()
+            {
+                // Manifest checksum mismatched.
+                warn!("{err}");
+
+                let server = dist_root_server(download.process)?;
+                if server == DEFAULT_DIST_SERVER {
+                    info!("this is likely due to an ongoing update of the official release server, please try again later");
+                    info!("see <https://github.com/rust-lang/rustup/issues/3390> for more details");
+                } else {
+                    info!("this might indicate an issue with the third-party release server '{server}'");
+                    info!("see <https://github.com/rust-lang/rustup/issues/3885> for more details");
+                }
             }
             Err(any)
         }

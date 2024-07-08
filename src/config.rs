@@ -1,9 +1,8 @@
-use std::borrow::Cow;
 use std::fmt::{self, Debug, Display};
-use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::{env, io};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
@@ -288,33 +287,13 @@ impl<'a> Cfg<'a> {
         let default_host_triple =
             settings_file.with(|s| Ok(get_default_host_triple(s, process)))?;
         // Environment override
-        let env_override = process
-            .var("RUSTUP_TOOLCHAIN")
-            .ok()
-            .and_then(utils::if_not_empty)
+        let env_override = non_empty_env_var("RUSTUP_TOOLCHAIN", process)?
             .map(ResolvableLocalToolchainName::try_from)
             .transpose()?
             .map(|t| t.resolve(&default_host_triple))
             .transpose()?;
 
-        let dist_root_server = match process.var("RUSTUP_DIST_SERVER") {
-            Ok(s) if !s.is_empty() => {
-                trace!("`RUSTUP_DIST_SERVER` has been set to `{s}`");
-                s
-            }
-            _ => {
-                // For backward compatibility
-                process
-                    .var("RUSTUP_DIST_ROOT")
-                    .ok()
-                    .and_then(utils::if_not_empty)
-                    .inspect(|url| trace!("`RUSTUP_DIST_ROOT` has been set to `{url}`"))
-                    .map_or(Cow::Borrowed(dist::DEFAULT_DIST_ROOT), Cow::Owned)
-                    .as_ref()
-                    .trim_end_matches("/dist")
-                    .to_owned()
-            }
-        };
+        let dist_root_server = dist_root_server(process)?;
 
         let notify_clone = notify_handler.clone();
         let tmp_cx = temp::Context::new(
@@ -957,6 +936,24 @@ impl<'a> Cfg<'a> {
     }
 }
 
+pub(crate) fn dist_root_server(process: &Process) -> Result<String> {
+    Ok(match non_empty_env_var("RUSTUP_DIST_SERVER", process)? {
+        Some(s) => {
+            trace!("`RUSTUP_DIST_SERVER` has been set to `{s}`");
+            s
+        }
+        None => {
+            // For backward compatibility
+            non_empty_env_var("RUSTUP_DIST_ROOT", process)?
+                .inspect(|url| trace!("`RUSTUP_DIST_ROOT` has been set to `{url}`"))
+                .as_ref()
+                .map(|root| root.trim_end_matches("/dist"))
+                .unwrap_or(dist::DEFAULT_DIST_SERVER)
+                .to_owned()
+        }
+    })
+}
+
 impl<'a> Debug for Cfg<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self {
@@ -998,6 +995,15 @@ fn get_default_host_triple(s: &Settings, process: &Process) -> dist::TargetTripl
         .as_ref()
         .map(dist::TargetTriple::new)
         .unwrap_or_else(|| dist::TargetTriple::from_host_or_build(process))
+}
+
+fn non_empty_env_var(name: &str, process: &Process) -> anyhow::Result<Option<String>> {
+    match process.var(name) {
+        Ok(s) if !s.is_empty() => Ok(Some(s)),
+        Ok(_) => Ok(None),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn no_toolchain_error(process: &Process) -> anyhow::Error {
