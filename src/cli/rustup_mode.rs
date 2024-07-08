@@ -1165,7 +1165,7 @@ async fn target_remove(
         let target = TargetTriple::new(target);
         let default_target = cfg.get_default_host_triple()?;
         if target == default_target {
-            warn!("after removing the default host target, proc-macros and build scripts might no longer build");
+            warn!("removing the default host target; proc-macros and build scripts might no longer build");
         }
         // Whether we have at most 1 component target that is not `None` (wildcard).
         let has_at_most_one_target = distributable
@@ -1179,7 +1179,7 @@ async fn target_remove(
             .at_most_one()
             .is_ok();
         if has_at_most_one_target {
-            warn!("after removing the last target, no build targets will be available");
+            warn!("removing the last target; no build targets will be available");
         }
         let new_component = Component::new("rust-std".to_string(), Some(target), false);
         distributable.remove_component(new_component).await?;
@@ -1281,8 +1281,25 @@ async fn toolchain_link(
 }
 
 fn toolchain_remove(cfg: &mut Cfg<'_>, opts: UninstallOpts) -> Result<utils::ExitCode> {
+    let default_toolchain = cfg.get_default().ok().flatten();
+    let active_toolchain = cfg.find_active_toolchain().ok().flatten().map(|(it, _)| it);
+
     for toolchain_name in &opts.toolchain {
         let toolchain_name = toolchain_name.resolve(&cfg.get_default_host_triple()?)?;
+
+        if active_toolchain
+            .as_ref()
+            .is_some_and(|n| n == &toolchain_name)
+        {
+            warn!("removing the active toolchain; a toolchain override will be required for running Rust tools");
+        }
+        if default_toolchain
+            .as_ref()
+            .is_some_and(|n| n == &toolchain_name)
+        {
+            warn!("removing the default toolchain; proc-macros and build scripts might no longer build");
+        }
+
         Toolchain::ensure_removed(cfg, (&toolchain_name).into())?;
     }
     Ok(utils::ExitCode(0))
