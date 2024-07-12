@@ -22,11 +22,11 @@ use tempfile::TempDir;
 use url::Url;
 
 use crate::cli::rustup_mode;
-use crate::currentprocess;
+use crate::process;
 use crate::test as rustup_test;
 use crate::test::const_dist_dir;
 use crate::test::this_host_triple;
-use crate::utils::{raw, utils};
+use crate::utils::utils;
 
 use super::{
     dist::{
@@ -515,13 +515,6 @@ impl Config {
         self.workdir.borrow().clone()
     }
 
-    pub fn create_rustup_sh_metadata(&self) {
-        let rustup_dir = self.homedir.join(".rustup");
-        fs::create_dir_all(&rustup_dir).unwrap();
-        let version_file = rustup_dir.join("rustup-version");
-        raw::write_file(&version_file, "").unwrap();
-    }
-
     pub fn cmd<I, A>(&self, name: &str, args: I) -> Command
     where
         I: IntoIterator<Item = A>,
@@ -797,7 +790,7 @@ impl Config {
             );
         }
 
-        let tp = currentprocess::TestProcess::new(&*self.workdir.borrow(), &arg_strings, vars, "");
+        let tp = process::TestProcess::new(&*self.workdir.borrow(), &arg_strings, vars, "");
         let process_res = rustup_mode::main(tp.process.current_dir().unwrap(), &tp.process).await;
         // convert Err's into an ec
         let ec = match process_res {

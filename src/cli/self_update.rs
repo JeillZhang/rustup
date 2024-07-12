@@ -55,10 +55,10 @@ use crate::{
         markdown::md,
     },
     config::Cfg,
-    currentprocess::{terminalsource, Process},
     dist::{self, PartialToolchainDesc, Profile, TargetTriple, ToolchainDesc},
     errors::RustupError,
     install::UpdateStatus,
+    process::{terminalsource, Process},
     toolchain::{
         DistributableToolchain, MaybeOfficialToolchainName, ResolvableToolchainName, Toolchain,
         ToolchainName,
@@ -496,13 +496,6 @@ pub(crate) async fn install(
     mut opts: InstallOpts<'_>,
     process: &Process,
 ) -> Result<utils::ExitCode> {
-    if !process
-        .var_os("RUSTUP_INIT_SKIP_EXISTENCE_CHECKS")
-        .map_or(false, |s| s == "yes")
-    {
-        do_pre_install_sanity_checks(no_prompt, process)?;
-    }
-
     opts.validate(process).map_err(|e| {
         anyhow!(
             "Pre-checks for host and toolchain failed: {e}\n\
@@ -643,42 +636,6 @@ fn check_existence_of_rustc_or_cargo_in_path(no_prompt: bool, process: &Process)
         warn!("or pass `-y' to ignore all ignorable checks.");
         ignorable_error("cannot install while Rust is installed", no_prompt, process)?;
     }
-    Ok(())
-}
-
-fn do_pre_install_sanity_checks(no_prompt: bool, process: &Process) -> Result<()> {
-    let rustc_manifest_path = PathBuf::from("/usr/local/lib/rustlib/manifest-rustc");
-    let uninstaller_path = PathBuf::from("/usr/local/lib/rustlib/uninstall.sh");
-    let rustup_sh_path = process.home_dir().unwrap().join(".rustup");
-    let rustup_sh_version_path = rustup_sh_path.join("rustup-version");
-
-    let rustc_exists = rustc_manifest_path.exists() && uninstaller_path.exists();
-    let rustup_sh_exists = rustup_sh_version_path.exists();
-
-    if rustc_exists {
-        warn!("it looks like you have an existing installation of Rust");
-        warn!("rustup cannot be installed alongside Rust. Please uninstall first");
-        warn!(
-            "run `{}` as root to uninstall Rust",
-            uninstaller_path.display()
-        );
-        ignorable_error("cannot install while Rust is installed", no_prompt, process)?;
-    }
-
-    if rustup_sh_exists {
-        warn!("it looks like you have existing rustup.sh metadata");
-        warn!("rustup cannot be installed while rustup.sh metadata exists");
-        warn!("delete `{}` to remove rustup.sh", rustup_sh_path.display());
-        warn!("or, if you already have rustup installed, you can run");
-        warn!("`rustup self update` and `rustup toolchain list` to upgrade");
-        warn!("your directory structure");
-        ignorable_error(
-            "cannot install while rustup.sh is installed",
-            no_prompt,
-            process,
-        )?;
-    }
-
     Ok(())
 }
 
@@ -1033,6 +990,7 @@ pub(crate) async fn update(cfg: &Cfg<'_>) -> Result<utils::ExitCode> {
             error!("you should probably use your system package manager to update rustup");
             return Ok(utils::ExitCode(1));
         }
+        #[cfg(not(windows))]
         Skip => {
             info!("Skipping self-update at this time");
             return Ok(utils::ExitCode(0));
@@ -1257,7 +1215,7 @@ mod tests {
     use crate::cli::self_update::InstallOpts;
     use crate::dist::{PartialToolchainDesc, Profile};
     use crate::test::{test_dir, with_rustup_home, Env};
-    use crate::{currentprocess::TestProcess, for_host};
+    use crate::{for_host, process::TestProcess};
 
     #[test]
     fn default_toolchain_is_stable() {

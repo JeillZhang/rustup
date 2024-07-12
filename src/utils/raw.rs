@@ -8,7 +8,7 @@ use std::path::Path;
 use std::str;
 
 #[cfg(not(windows))]
-use crate::currentprocess::Process;
+use crate::process::Process;
 
 pub(crate) fn ensure_dir_exists<P: AsRef<Path>, F: FnOnce(&Path)>(
     path: P,
@@ -233,9 +233,12 @@ pub(crate) fn hardlink(src: &Path, dest: &Path) -> io::Result<()> {
 
 pub fn remove_dir(path: &Path) -> io::Result<()> {
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
-        if cfg!(windows) {
+        #[cfg(windows)]
+        {
             fs::remove_dir(path)
-        } else {
+        }
+        #[cfg(not(windows))]
+        {
             fs::remove_file(path)
         }
     } else {
