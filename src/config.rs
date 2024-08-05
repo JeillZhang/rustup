@@ -11,8 +11,11 @@ use tokio_stream::StreamExt;
 use tracing::trace;
 
 use crate::{
-    cli::self_update::SelfUpdateMode,
-    dist::{self, download::DownloadCfg, temp, PartialToolchainDesc, Profile, ToolchainDesc},
+    cli::{common, self_update::SelfUpdateMode},
+    dist::{
+        self, download::DownloadCfg, temp, PartialToolchainDesc, Profile, TargetTriple,
+        ToolchainDesc,
+    },
     errors::RustupError,
     fallback_settings::FallbackSettings,
     install::UpdateStatus,
@@ -120,7 +123,7 @@ enum OverrideCfg {
         toolchain: ToolchainDesc,
         components: Vec<String>,
         targets: Vec<String>,
-        profile: Option<dist::Profile>,
+        profile: Option<Profile>,
     },
 }
 
@@ -172,7 +175,7 @@ impl OverrideCfg {
                         .toolchain
                         .profile
                         .as_deref()
-                        .map(dist::Profile::from_str)
+                        .map(Profile::from_str)
                         .transpose()?,
                 }
             }
@@ -227,7 +230,7 @@ impl From<LocalToolchainName> for OverrideCfg {
 pub(crate) const UNIX_FALLBACK_SETTINGS: &str = "/etc/rustup/settings.toml";
 
 pub(crate) struct Cfg<'a> {
-    profile_override: Option<dist::Profile>,
+    profile_override: Option<Profile>,
     pub rustup_dir: PathBuf,
     pub settings_file: SettingsFile,
     pub fallback_settings: Option<FallbackSettings>,
@@ -345,7 +348,7 @@ impl<'a> Cfg<'a> {
         }
     }
 
-    pub(crate) fn set_profile_override(&mut self, profile: dist::Profile) {
+    pub(crate) fn set_profile_override(&mut self, profile: Profile) {
         self.profile_override = Some(profile);
     }
 
@@ -388,7 +391,7 @@ impl<'a> Cfg<'a> {
     // if there is no profile in the settings file. The last variant happens when
     // a user upgrades from a version of Rustup without profiles to a version of
     // Rustup with profiles.
-    pub(crate) fn get_profile(&self) -> Result<dist::Profile> {
+    pub(crate) fn get_profile(&self) -> Result<Profile> {
         if let Some(p) = self.profile_override {
             return Ok(p);
         }
@@ -752,8 +755,9 @@ impl<'a> Cfg<'a> {
                     profile,
                 } => {
                     let toolchain = self
-                        .ensure_installed(toolchain, components, targets, profile)
-                        .await?;
+                        .ensure_installed(&toolchain, components, targets, profile, false)
+                        .await?
+                        .1;
                     Ok((toolchain, reason))
                 }
             },
@@ -767,8 +771,9 @@ impl<'a> Cfg<'a> {
                 Some(ToolchainName::Official(toolchain_desc)) => {
                     let reason = ActiveReason::Default;
                     let toolchain = self
-                        .ensure_installed(toolchain_desc, vec![], vec![], None)
-                        .await?;
+                        .ensure_installed(&toolchain_desc, vec![], vec![], None, false)
+                        .await?
+                        .1;
                     Ok((toolchain, reason))
                 }
             },
@@ -777,40 +782,56 @@ impl<'a> Cfg<'a> {
 
     // Returns a Toolchain matching the given ToolchainDesc, installing it and
     // the given components and targets if they aren't already installed.
-    async fn ensure_installed(
+    #[tracing::instrument(level = "trace", err(level = "trace"), skip_all)]
+    pub(crate) async fn ensure_installed(
         &self,
-        toolchain: ToolchainDesc,
+        toolchain: &ToolchainDesc,
         components: Vec<String>,
         targets: Vec<String>,
         profile: Option<Profile>,
-    ) -> Result<Toolchain<'_>> {
+        verbose: bool,
+    ) -> Result<(UpdateStatus, Toolchain<'_>)> {
+        common::warn_if_host_is_incompatible(
+            toolchain,
+            &TargetTriple::from_host_or_build(self.process),
+            &toolchain.target,
+            false,
+        )?;
+        if verbose {
+            (self.notify_handler)(Notification::LookingForToolchain(toolchain));
+        }
         let components: Vec<_> = components.iter().map(AsRef::as_ref).collect();
         let targets: Vec<_> = targets.iter().map(AsRef::as_ref).collect();
-        let toolchain = match DistributableToolchain::new(self, toolchain.clone()) {
+        let profile = match profile {
+            Some(profile) => profile,
+            None => self.get_profile()?,
+        };
+        let (status, toolchain) = match DistributableToolchain::new(self, toolchain.clone()) {
             Err(RustupError::ToolchainNotInstalled(_)) => {
                 DistributableToolchain::install(
                     self,
-                    &toolchain,
+                    toolchain,
                     &components,
                     &targets,
-                    profile.unwrap_or(Profile::Default),
+                    profile,
                     false,
                 )
                 .await?
-                .1
             }
             Ok(mut distributable) => {
-                if !distributable.components_exist(&components, &targets)? {
-                    distributable
-                        .update(&components, &targets, profile.unwrap_or(Profile::Default))
-                        .await?;
+                if verbose {
+                    (self.notify_handler)(Notification::UsingExistingToolchain(toolchain));
                 }
-                distributable
+                let status = if !distributable.components_exist(&components, &targets)? {
+                    distributable.update(&components, &targets, profile).await?
+                } else {
+                    UpdateStatus::Unchanged
+                };
+                (status, distributable)
             }
             Err(e) => return Err(e.into()),
-        }
-        .into();
-        Ok(toolchain)
+        };
+        Ok((status, toolchain.into()))
     }
 
     /// Get the configured default toolchain.
@@ -913,7 +934,7 @@ impl<'a> Cfg<'a> {
         // against the 'stable' toolchain.  This provides early errors
         // if the supplied triple is insufficient / bad.
         dist::PartialToolchainDesc::from_str("stable")?
-            .resolve(&dist::TargetTriple::new(host_triple.clone()))?;
+            .resolve(&TargetTriple::new(host_triple.clone()))?;
         self.settings_file.with_mut(|s| {
             s.default_host_triple = Some(host_triple);
             Ok(())
@@ -921,7 +942,7 @@ impl<'a> Cfg<'a> {
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
-    pub(crate) fn get_default_host_triple(&self) -> Result<dist::TargetTriple> {
+    pub(crate) fn get_default_host_triple(&self) -> Result<TargetTriple> {
         self.settings_file
             .with(|s| Ok(get_default_host_triple(s, self.process)))
     }
@@ -989,11 +1010,11 @@ impl<'a> Debug for Cfg<'a> {
     }
 }
 
-fn get_default_host_triple(s: &Settings, process: &Process) -> dist::TargetTriple {
+fn get_default_host_triple(s: &Settings, process: &Process) -> TargetTriple {
     s.default_host_triple
         .as_ref()
-        .map(dist::TargetTriple::new)
-        .unwrap_or_else(|| dist::TargetTriple::from_host_or_build(process))
+        .map(TargetTriple::new)
+        .unwrap_or_else(|| TargetTriple::from_host_or_build(process))
 }
 
 fn non_empty_env_var(name: &str, process: &Process) -> anyhow::Result<Option<String>> {
