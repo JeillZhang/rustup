@@ -100,14 +100,14 @@ fn plus_toolchain_value_parser(s: &str) -> clap::error::Result<ResolvableToolcha
 #[derive(Debug, Subcommand)]
 #[command(name = "rustup", bin_name = "rustup[EXE]")]
 enum RustupSubcmd {
-    /// Update Rust toolchains
+    /// Install or update the given toolchains, or by default the active toolchain
     #[command(hide = true, after_help = INSTALL_HELP)]
     Install {
         #[command(flatten)]
         opts: UpdateOpts,
     },
 
-    /// Uninstall Rust toolchains
+    /// Uninstall the given toolchains
     #[command(hide = true)]
     Uninstall {
         #[command(flatten)]
@@ -302,14 +302,14 @@ enum ToolchainSubcmd {
         quiet: bool,
     },
 
-    /// Install or update a given toolchain
+    /// Install or update the given toolchains, or by default the active toolchain
     #[command(aliases = ["update", "add"] )]
     Install {
         #[command(flatten)]
         opts: UpdateOpts,
     },
 
-    /// Uninstall a toolchain
+    /// Uninstall the given toolchains
     #[command(alias = "remove")]
     Uninstall {
         #[command(flatten)]
@@ -330,7 +330,6 @@ enum ToolchainSubcmd {
 #[derive(Debug, Default, Args)]
 struct UpdateOpts {
     #[arg(
-        required = true,
         help = OFFICIAL_TOOLCHAIN_ARG_HELP,
         num_args = 1..,
     )]
@@ -584,7 +583,7 @@ pub async fn main(current_dir: PathBuf, process: &Process) -> Result<utils::Exit
 
     match subcmd {
         RustupSubcmd::DumpTestament => common::dump_testament(process),
-        RustupSubcmd::Install { opts } => update(cfg, opts).await,
+        RustupSubcmd::Install { opts } => update(cfg, opts, true).await,
         RustupSubcmd::Uninstall { opts } => toolchain_remove(cfg, opts),
         RustupSubcmd::Show { verbose, subcmd } => handle_epipe(match subcmd {
             None => show(cfg, verbose),
@@ -610,11 +609,12 @@ pub async fn main(current_dir: PathBuf, process: &Process) -> Result<utils::Exit
                     force_non_host,
                     ..UpdateOpts::default()
                 },
+                false,
             )
             .await
         }
         RustupSubcmd::Toolchain { subcmd } => match subcmd {
-            ToolchainSubcmd::Install { opts } => update(cfg, opts).await,
+            ToolchainSubcmd::Install { opts } => update(cfg, opts, true).await,
             ToolchainSubcmd::List { verbose, quiet } => {
                 handle_epipe(common::list_toolchains(cfg, verbose, quiet))
             }
@@ -791,7 +791,11 @@ async fn check_updates(cfg: &Cfg<'_>) -> Result<utils::ExitCode> {
     Ok(utils::ExitCode(0))
 }
 
-async fn update(cfg: &mut Cfg<'_>, opts: UpdateOpts) -> Result<utils::ExitCode> {
+async fn update(
+    cfg: &mut Cfg<'_>,
+    opts: UpdateOpts,
+    ensure_active_toolchain: bool,
+) -> Result<utils::ExitCode> {
     let mut exit_code = utils::ExitCode(0);
 
     common::warn_if_host_is_emulated(cfg.process);
@@ -861,6 +865,13 @@ async fn update(cfg: &mut Cfg<'_>, opts: UpdateOpts) -> Result<utils::ExitCode> 
         if self_update {
             exit_code &= common::self_update(|| Ok(()), cfg.process).await?;
         }
+    } else if ensure_active_toolchain {
+        let (toolchain, reason) = cfg.find_or_install_active_toolchain(true).await?;
+        info!(
+            "the active toolchain `{}` has been installed",
+            toolchain.name()
+        );
+        info!("it's active because: {reason}");
     } else {
         exit_code &= common::update_all_channels(cfg, self_update, opts.force).await?;
         info!("cleaning up downloads & tmp directories");
