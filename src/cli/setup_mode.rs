@@ -7,7 +7,7 @@ use tracing_subscriber::{reload::Handle, EnvFilter, Registry};
 
 use crate::{
     cli::{
-        common,
+        common::{self, update_console_filter},
         self_update::{self, InstallOpts},
     },
     dist::Profile,
@@ -25,12 +25,12 @@ use crate::{
     before_help = format!("rustup-init {}", common::version()),
 )]
 struct RustupInit {
-    /// Enable verbose output
-    #[arg(short, long)]
+    /// Set log level to 'DEBUG' if 'RUSTUP_LOG' is unset
+    #[arg(short, long, conflicts_with = "quiet")]
     verbose: bool,
 
-    /// Disable progress output, limit console logger level to 'WARN' if 'RUSTUP_LOG' is unset
-    #[arg(short, long)]
+    /// Disable progress output, set log level to 'WARN' if 'RUSTUP_LOG' is unset
+    #[arg(short, long, conflicts_with = "verbose")]
     quiet: bool,
 
     /// Disable confirmation prompt
@@ -115,11 +115,7 @@ pub async fn main(
         warn!("{}", common::WARN_COMPLETE_PROFILE);
     }
 
-    if quiet && process.var("RUSTUP_LOG").is_err() {
-        console_filter
-            .modify(|it| *it = EnvFilter::new("rustup=WARN"))
-            .expect("error reloading `EnvFilter` for console_logger");
-    }
+    update_console_filter(process, &console_filter, quiet, verbose);
 
     let opts = InstallOpts {
         default_host_triple: default_host,
@@ -131,5 +127,5 @@ pub async fn main(
         targets: &target.iter().map(|s| &**s).collect::<Vec<_>>(),
     };
 
-    self_update::install(current_dir, no_prompt, verbose, quiet, opts, process).await
+    self_update::install(current_dir, no_prompt, quiet, opts, process).await
 }

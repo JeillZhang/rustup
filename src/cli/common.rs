@@ -13,6 +13,7 @@ use std::{cmp, env};
 use anyhow::{anyhow, Context, Result};
 use git_testament::{git_testament, render_testament};
 use tracing::{debug, error, info, trace, warn};
+use tracing_subscriber::{reload::Handle, EnvFilter, Registry};
 
 use super::self_update;
 use crate::{
@@ -127,15 +128,13 @@ pub(crate) fn read_line(process: &Process) -> Result<String> {
 pub(super) struct Notifier {
     tracker: Mutex<DownloadTracker>,
     ram_notice_shown: RefCell<bool>,
-    verbose: bool,
 }
 
 impl Notifier {
-    pub(super) fn new(verbose: bool, quiet: bool, process: &Process) -> Self {
+    pub(super) fn new(quiet: bool, process: &Process) -> Self {
         Self {
             tracker: Mutex::new(DownloadTracker::new_with_display_progress(!quiet, process)),
             ram_notice_shown: RefCell::new(false),
-            verbose,
         }
     }
 
@@ -158,9 +157,7 @@ impl Notifier {
         for n in format!("{n}").lines() {
             match level {
                 NotificationLevel::Debug => {
-                    if self.verbose {
-                        debug!("{}", n);
-                    }
+                    debug!("{}", n);
                 }
                 NotificationLevel::Info => {
                     info!("{}", n);
@@ -180,13 +177,8 @@ impl Notifier {
 }
 
 #[tracing::instrument(level = "trace")]
-pub(crate) fn set_globals(
-    current_dir: PathBuf,
-    verbose: bool,
-    quiet: bool,
-    process: &Process,
-) -> Result<Cfg<'_>> {
-    let notifier = Notifier::new(verbose, quiet, process);
+pub(crate) fn set_globals(current_dir: PathBuf, quiet: bool, process: &Process) -> Result<Cfg<'_>> {
+    let notifier = Notifier::new(quiet, process);
     Cfg::from_env(current_dir, Arc::new(move |n| notifier.handle(n)), process)
 }
 
@@ -659,5 +651,33 @@ pub(crate) fn warn_if_host_is_emulated(process: &Process) {
             TargetTriple::from_host_or_build(process)
         );
         warn!("For best compatibility and performance you should reinstall rustup for your native CPU.");
+    }
+}
+
+/// Updates the console logger level according to whether `quiet` or `verbose` is set to `true`.
+///
+/// Does nothing if at least one of the following conditions is met:
+/// - The `RUSTUP_LOG` environment variable is set.
+/// - Both `quiet` and `verbose` are set to `true`.
+pub(super) fn update_console_filter(
+    process: &Process,
+    filter: &Handle<EnvFilter, Registry>,
+    quiet: bool,
+    verbose: bool,
+) {
+    if process.var("RUSTUP_LOG").is_ok() {
+        return;
+    }
+
+    let maybe_directives = match (quiet, verbose) {
+        (true, _) => Some("rustup=WARN"),
+        (_, true) => Some("rustup=DEBUG"),
+        (_, _) => None,
+    };
+
+    if let Some(directives) = maybe_directives {
+        filter
+            .modify(|it| *it = EnvFilter::new(directives))
+            .expect("error reloading `EnvFilter` for console_logger");
     }
 }

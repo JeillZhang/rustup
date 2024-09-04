@@ -10,10 +10,11 @@ use clap::{builder::PossibleValue, Args, CommandFactory, Parser, Subcommand, Val
 use clap_complete::Shell;
 use itertools::Itertools;
 use tracing::{info, trace, warn};
+use tracing_subscriber::{reload::Handle, EnvFilter, Registry};
 
 use crate::{
     cli::{
-        common::{self, PackageUpdate},
+        common::{self, update_console_filter, PackageUpdate},
         errors::CLIError,
         help::*,
         self_update::{self, check_rustup_update, SelfUpdateMode},
@@ -68,11 +69,11 @@ fn handle_epipe(res: Result<utils::ExitCode>) -> Result<utils::ExitCode> {
     after_help = RUSTUP_HELP,
 )]
 struct Rustup {
-    /// Enable verbose output
-    #[arg(short, long)]
+    /// Set log level to 'DEBUG' if 'RUSTUP_LOG' is unset
+    #[arg(short, long, conflicts_with = "quiet")]
     verbose: bool,
 
-    /// Disable progress output
+    /// Disable progress output, set log level to 'WARN' if 'RUSTUP_LOG' is unset
     #[arg(short, long, conflicts_with = "verbose")]
     quiet: bool,
 
@@ -532,7 +533,11 @@ enum SetSubcmd {
 }
 
 #[tracing::instrument(level = "trace", fields(args = format!("{:?}", process.args_os().collect::<Vec<_>>())))]
-pub async fn main(current_dir: PathBuf, process: &Process) -> Result<utils::ExitCode> {
+pub async fn main(
+    current_dir: PathBuf,
+    process: &Process,
+    console_filter: Handle<EnvFilter, Registry>,
+) -> Result<utils::ExitCode> {
     self_update::cleanup_self_updater(process)?;
 
     use clap::error::ErrorKind::*;
@@ -545,7 +550,7 @@ pub async fn main(current_dir: PathBuf, process: &Process) -> Result<utils::Exit
         Err(err) if err.kind() == DisplayVersion => {
             write!(process.stdout().lock(), "{err}")?;
             info!("This is the version for the rustup toolchain manager, not the rustc compiler.");
-            let mut cfg = common::set_globals(current_dir, false, true, process)?;
+            let mut cfg = common::set_globals(current_dir, true, process)?;
             match cfg.active_rustc_version() {
                 Ok(Some(version)) => info!("The currently active `rustc` version is `{version}`"),
                 Ok(None) => info!("No `rustc` is currently active"),
@@ -570,7 +575,9 @@ pub async fn main(current_dir: PathBuf, process: &Process) -> Result<utils::Exit
         }
     };
 
-    let cfg = &mut common::set_globals(current_dir, matches.verbose, matches.quiet, process)?;
+    update_console_filter(process, &console_filter, matches.quiet, matches.verbose);
+
+    let cfg = &mut common::set_globals(current_dir, matches.quiet, process)?;
 
     if let Some(t) = &matches.plus_toolchain {
         cfg.set_toolchain_override(t);
