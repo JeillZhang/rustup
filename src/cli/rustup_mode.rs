@@ -161,6 +161,10 @@ enum RustupSubcmd {
     Default {
         #[arg(help = MAYBE_RESOLVABLE_TOOLCHAIN_ARG_HELP)]
         toolchain: Option<MaybeResolvableToolchainName>,
+
+        /// Install toolchains that require an emulator. See https://github.com/rust-lang/rustup/wiki/Non-host-toolchains
+        #[arg(long)]
+        force_non_host: bool,
     },
 
     /// Modify or query the installed toolchains
@@ -631,7 +635,10 @@ pub async fn main(
             ToolchainSubcmd::Uninstall { opts } => toolchain_remove(cfg, opts),
         },
         RustupSubcmd::Check => check_updates(cfg).await,
-        RustupSubcmd::Default { toolchain } => default_(cfg, toolchain).await,
+        RustupSubcmd::Default {
+            toolchain,
+            force_non_host,
+        } => default_(cfg, toolchain, force_non_host).await,
         RustupSubcmd::Target { subcmd } => match subcmd {
             TargetSubcmd::List {
                 toolchain,
@@ -710,6 +717,7 @@ pub async fn main(
 async fn default_(
     cfg: &Cfg<'_>,
     toolchain: Option<MaybeResolvableToolchainName>,
+    force_non_host: bool,
 ) -> Result<utils::ExitCode> {
     common::warn_if_host_is_emulated(cfg.process);
 
@@ -725,7 +733,7 @@ async fn default_(
             MaybeResolvableToolchainName::Some(ResolvableToolchainName::Official(toolchain)) => {
                 let desc = toolchain.resolve(&cfg.get_default_host_triple()?)?;
                 let status = cfg
-                    .ensure_installed(&desc, vec![], vec![], None, true)
+                    .ensure_installed(&desc, vec![], vec![], None, force_non_host, true)
                     .await?
                     .0;
 
@@ -814,7 +822,7 @@ async fn update(
     let self_update = !self_update::NEVER_SELF_UPDATE
         && self_update_mode == SelfUpdateMode::Enable
         && !opts.no_self_update;
-    let forced = opts.force_non_host;
+    let force_non_host = opts.force_non_host;
     if let Some(p) = opts.profile {
         cfg.set_profile_override(p);
     }
@@ -829,7 +837,12 @@ async fn update(
             if name.has_triple() {
                 let host_arch = TargetTriple::from_host_or_build(cfg.process);
                 let target_triple = name.clone().resolve(&host_arch)?.target;
-                common::warn_if_host_is_incompatible(&name, &host_arch, &target_triple, forced)?;
+                common::check_non_host_toolchain(
+                    name.to_string(),
+                    &host_arch,
+                    &target_triple,
+                    force_non_host,
+                )?;
             }
             let desc = name.resolve(&cfg.get_default_host_triple()?)?;
 
@@ -873,7 +886,9 @@ async fn update(
             exit_code &= common::self_update(|| Ok(()), cfg.process).await?;
         }
     } else if ensure_active_toolchain {
-        let (toolchain, reason) = cfg.find_or_install_active_toolchain(true).await?;
+        let (toolchain, reason) = cfg
+            .find_or_install_active_toolchain(force_non_host, true)
+            .await?;
         info!("the active toolchain `{toolchain}` has been installed");
         info!("it's active because: {reason}");
     } else {
