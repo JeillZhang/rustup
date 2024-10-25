@@ -25,7 +25,7 @@ use crate::process;
 use crate::test as rustup_test;
 use crate::test::const_dist_dir;
 use crate::test::this_host_triple;
-use crate::utils::utils;
+use crate::utils;
 
 use super::{
     dist::{
@@ -668,11 +668,8 @@ impl Config {
             println!("expected.ok: true");
             print_indented("expected.stdout", stdout);
             print_indented("expected.stderr", stderr);
-            #[allow(clippy::dbg_macro)]
-            {
-                dbg!(out.stdout == stdout);
-                dbg!(out.stderr == stderr);
-            }
+            dbg!(out.stdout == stdout);
+            dbg!(out.stderr == stderr);
             panic!();
         }
     }
