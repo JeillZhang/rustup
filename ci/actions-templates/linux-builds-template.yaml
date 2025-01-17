@@ -5,7 +5,7 @@ jobs: # skip-master skip-pr skip-stable
   build-linux-pr: # job-name skip-master skip-stable
   build-linux-master: # job-name skip-pr skip-stable
   build-linux-stable: # job-name skip-master skip-pr
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     if: ${{ contains('["pull_request", "merge_group"]', github.event_name) }} # skip-master skip-stable
     if: ${{ (github.event_name == 'push' && github.ref_name == 'master') || github.event_name == 'schedule' }} # skip-pr skip-stable
     if: ${{ github.event_name == 'push' && github.ref_name == 'stable' }} # skip-pr skip-master
@@ -22,7 +22,7 @@ jobs: # skip-master skip-pr skip-stable
           - x86_64-unknown-linux-gnu
           - armv7-unknown-linux-gnueabihf
           - aarch64-linux-android
-          - aarch64-unknown-linux-gnu      # skip-pr
+          - aarch64-unknown-linux-gnu
           - aarch64-unknown-linux-musl     # skip-pr skip-master
           - powerpc64-unknown-linux-gnu    # skip-pr
           - x86_64-unknown-linux-musl      # skip-pr
@@ -47,8 +47,12 @@ jobs: # skip-master skip-pr skip-stable
             #snap_arch: amd64
           - target: i686-unknown-linux-gnu # skip-pr skip-master
             #snap_arch: i386  # skip-pr skip-master
-          - target: aarch64-unknown-linux-gnu # skip-pr
-            #snap_arch: arm64 # skip-pr
+            # We add an ARM-based host to the following target.
+            # We need to do that because rust's CI uses ARM-based runners
+            # to generate their Dockerfiles.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            run_tests: YES
           - target: armv7-unknown-linux-gnueabihf
             #snap_arch: armhf
           - target: powerpc64le-unknown-linux-gnu # skip-pr skip-master
