@@ -103,18 +103,18 @@ impl Package for DirectoryPackage {
             let part = ComponentPart::decode(l)
                 .ok_or_else(|| RustupError::CorruptComponent(name.to_owned()))?;
 
-            let path = part.1;
+            let path = part.path;
             let src_path = root.join(&path);
 
-            match &*part.0 {
-                "file" => {
+            match part.kind {
+                ComponentPartKind::File => {
                     if self.copy {
                         builder.copy_file(path.clone(), &src_path)?
                     } else {
                         builder.move_file(path.clone(), &src_path)?
                     }
                 }
-                "dir" => {
+                ComponentPartKind::Dir => {
                     if self.copy {
                         builder.copy_dir(path.clone(), &src_path)?
                     } else {
