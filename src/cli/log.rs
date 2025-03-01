@@ -153,12 +153,11 @@ where
 fn telemetry_default_tracer() -> Tracer {
     use std::time::Duration;
 
-    use opentelemetry::{KeyValue, global, trace::TracerProvider as _};
+    use opentelemetry::{global, trace::TracerProvider as _};
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{
         Resource,
-        runtime::Tokio,
-        trace::{Sampler, TracerProvider},
+        trace::{Sampler, SdkTracerProvider},
     };
 
     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -167,12 +166,36 @@ fn telemetry_default_tracer() -> Tracer {
         .build()
         .unwrap();
 
-    let provider = TracerProvider::builder()
+    let provider = SdkTracerProvider::builder()
         .with_sampler(Sampler::AlwaysOn)
-        .with_resource(Resource::new(vec![KeyValue::new("service.name", "rustup")]))
-        .with_batch_exporter(exporter, Tokio)
+        .with_resource(Resource::builder().with_service_name("rustup").build())
+        .with_batch_exporter(exporter)
         .build();
 
     global::set_tracer_provider(provider.clone());
     provider.tracer("tracing-otel-subscriber")
+}
+
+#[cfg(feature = "otel")]
+#[must_use]
+pub struct GlobalTelemetryGuard {
+    _private: (),
+}
+
+#[cfg(feature = "otel")]
+pub fn set_global_telemetry() -> GlobalTelemetryGuard {
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+    GlobalTelemetryGuard { _private: () }
+}
+
+#[cfg(feature = "otel")]
+impl Drop for GlobalTelemetryGuard {
+    fn drop(&mut self) {
+        // We're tracing, so block until all spans are exported.
+        opentelemetry::global::set_tracer_provider(
+            opentelemetry::trace::noop::NoopTracerProvider::new(),
+        );
+    }
 }
