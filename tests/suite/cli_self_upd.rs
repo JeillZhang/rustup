@@ -12,15 +12,12 @@ use retry::{
     delay::{Fibonacci, jitter},
     retry,
 };
-#[cfg(windows)]
-use rustup::test::{RegistryGuard, RegistryValueId, USER_PATH};
 use rustup::test::{
-    mock::{
-        clitools::{self, CliTestContext, Scenario, SelfUpdateTestContext, output_release_file},
-        dist::calc_hash,
-    },
+    CROSS_ARCH1, CliTestContext, Scenario, SelfUpdateTestContext, calc_hash, output_release_file,
     this_host_triple,
 };
+#[cfg(windows)]
+use rustup::test::{RegistryGuard, RegistryValueId, USER_PATH};
 use rustup::utils::{self, raw};
 use rustup::{DUP_TOOLS, TOOLS, for_host};
 #[cfg(windows)]
@@ -253,7 +250,7 @@ async fn uninstall_self_delete_works() {
     let rustup = cx.config.cargodir.join(format!("bin/rustup{EXE_SUFFIX}"));
     let mut cmd = Command::new(rustup.clone());
     cmd.args(["self", "uninstall", "-y"]);
-    clitools::env(&cx.config, &mut cmd);
+    cx.config.env(&mut cmd);
     let out = cmd.output().unwrap();
     println!("out: {}", String::from_utf8(out.stdout).unwrap());
     println!("err: {}", String::from_utf8(out.stderr).unwrap());
@@ -452,7 +449,7 @@ async fn update_updates_rustup_bin() {
     // so that the running binary must be replaced.
     let mut cmd = Command::new(&bin);
     cmd.args(["self", "update"]);
-    clitools::env(&cx.config, &mut cmd);
+    cx.config.env(&mut cmd);
     let out = cmd.output().unwrap();
 
     println!("out: {}", String::from_utf8(out.stdout).unwrap());
@@ -917,14 +914,14 @@ async fn install_with_components_and_targets() {
             "-c",
             "rls",
             "-t",
-            clitools::CROSS_ARCH1,
+            CROSS_ARCH1,
             "--no-modify-path",
         ])
         .await;
     cx.config
         .expect_stdout_ok(
             &["rustup", "target", "list"],
-            &format!("{} (installed)", clitools::CROSS_ARCH1),
+            &format!("{} (installed)", CROSS_ARCH1),
         )
         .await;
     cx.config
