@@ -31,13 +31,13 @@
 //! and racy on Windows.
 
 use std::borrow::Cow;
-use std::env::consts::EXE_SUFFIX;
+use std::env::{self, consts::EXE_SUFFIX};
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
-use std::{env, fmt};
 
 use anyhow::{Context, Result, anyhow};
 use cfg_if::cfg_if;
@@ -76,6 +76,9 @@ mod unix;
 use unix::{delete_rustup_and_cargo_home, do_add_to_path, do_remove_from_path};
 #[cfg(unix)]
 pub(crate) use unix::{run_update, self_replace};
+
+#[cfg(unix)]
+use self::shell::{Nu, UnixShell};
 
 #[cfg(windows)]
 mod windows;
@@ -384,7 +387,7 @@ the corresponding `env` file under {cargo_home}.
 This is usually done by running one of the following (note the leading DOT):
     . "{cargo_home}/env"            # For sh/bash/zsh/ash/dash/pdksh
     source "{cargo_home}/env.fish"  # For fish
-    source "{cargo_home}/env.nu"    # For nushell
+    source $"{cargo_home_nushell}/env.nu"  # For nushell
 "#
     };
 }
@@ -578,13 +581,20 @@ pub(crate) async fn install(
         format!(post_install_msg_win!(), cargo_home = cargo_home)
     };
     #[cfg(not(windows))]
+    let cargo_home_nushell = Nu.cargo_home_str(process)?;
+    #[cfg(not(windows))]
     let msg = if no_modify_path {
         format!(
             post_install_msg_unix_no_modify_path!(),
-            cargo_home = cargo_home
+            cargo_home = cargo_home,
+            cargo_home_nushell = cargo_home_nushell,
         )
     } else {
-        format!(post_install_msg_unix!(), cargo_home = cargo_home)
+        format!(
+            post_install_msg_unix!(),
+            cargo_home = cargo_home,
+            cargo_home_nushell = cargo_home_nushell,
+        )
     };
     md(&mut term, msg);
 
