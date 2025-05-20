@@ -1,5 +1,7 @@
 //! Testing self install, uninstall and update
 
+#![allow(deprecated)]
+
 use std::env;
 use std::env::consts::EXE_SUFFIX;
 use std::fs;
@@ -388,26 +390,32 @@ info: downloading self-update (new version: {TEST_VERSION})
 
 #[tokio::test]
 async fn update_precise() {
-    let version = env!("CARGO_PKG_VERSION");
-    let expected_output = format!(
-        "info: checking for self-update (current version: {version})
-info: `RUSTUP_VERSION` has been set to `{TEST_VERSION}`
-info: downloading self-update (new version: {TEST_VERSION})
-"
-    );
-
-    let mut cx = SelfUpdateTestContext::new(TEST_VERSION).await;
+    let cx = SelfUpdateTestContext::new(TEST_VERSION).await;
     cx.config
-        .expect_ok(&["rustup-init", "-y", "--no-modify-path"])
-        .await;
+        .expect(["rustup-init", "-y", "--no-modify-path"])
+        .await
+        .is_ok();
     cx.config
-        .expect_ok_ex_env(
-            &["rustup", "self", "update"],
-            &[("RUSTUP_VERSION", TEST_VERSION)],
-            &format!("  rustup updated - {version} (from {version})\n\n",),
-            &expected_output,
+        .expect_with_env(
+            ["rustup", "self", "update"],
+            [("RUSTUP_VERSION", TEST_VERSION)],
         )
-        .await;
+        .await
+        .extend_redactions([
+            ("[TEST_VERSION]", TEST_VERSION),
+            ("[VERSION]", env!("CARGO_PKG_VERSION")),
+        ])
+        .with_stdout(snapbox::str![[r#"
+  rustup updated - [VERSION] (from [VERSION])
+
+
+"#]])
+        .with_stderr(snapbox::str![[r#"
+info: checking for self-update (current version: [VERSION])
+info: `RUSTUP_VERSION` has been set to `[TEST_VERSION]`
+info: downloading self-update (new version: [TEST_VERSION])
+
+"#]]);
 }
 
 #[cfg(windows)]
