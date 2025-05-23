@@ -19,7 +19,7 @@ use crate::{
         common::{self, PackageUpdate, update_console_filter},
         errors::CLIError,
         help::*,
-        self_update::{self, SelfUpdateMode, check_rustup_update},
+        self_update::{self, RustupUpdateAvailable, SelfUpdateMode, check_rustup_update},
         topical_doc,
     },
     command,
@@ -177,7 +177,10 @@ enum RustupSubcmd {
     },
 
     /// Check for updates to Rust toolchains and rustup
-    Check,
+    Check {
+        #[command(flatten)]
+        opts: CheckOpts,
+    },
 
     /// Modify a toolchain's supported targets
     Target {
@@ -336,6 +339,13 @@ enum ToolchainSubcmd {
         /// Path to the directory
         path: PathBuf,
     },
+}
+
+#[derive(Debug, Default, Args)]
+struct CheckOpts {
+    /// Don't check for self update when running the `rustup check` command
+    #[arg(long)]
+    no_self_update: bool,
 }
 
 #[derive(Debug, Default, Args)]
@@ -650,7 +660,7 @@ pub async fn main(
             }
             ToolchainSubcmd::Uninstall { opts } => toolchain_remove(cfg, opts).await,
         },
-        RustupSubcmd::Check => check_updates(cfg).await,
+        RustupSubcmd::Check { opts } => check_updates(cfg, opts).await,
         RustupSubcmd::Default {
             toolchain,
             force_non_host,
@@ -779,7 +789,9 @@ async fn default_(
     Ok(utils::ExitCode(0))
 }
 
-async fn check_updates(cfg: &Cfg<'_>) -> Result<utils::ExitCode> {
+async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode> {
+    let mut update_available = false;
+
     let mut t = cfg.process.stdout().terminal(cfg.process);
     let channels = cfg.list_channels()?;
 
@@ -801,12 +813,14 @@ async fn check_updates(cfg: &Cfg<'_>) -> Result<utils::ExitCode> {
                 writeln!(t.lock(), " : {cv}")?;
             }
             (Some(cv), Some(dv)) => {
+                update_available = true;
                 let _ = t.fg(terminalsource::Color::Yellow);
                 write!(t.lock(), "Update available")?;
                 let _ = t.reset();
                 writeln!(t.lock(), " : {cv} -> {dv}")?;
             }
             (None, Some(dv)) => {
+                update_available = true;
                 let _ = t.fg(terminalsource::Color::Yellow);
                 write!(t.lock(), "Update available")?;
                 let _ = t.reset();
@@ -815,9 +829,26 @@ async fn check_updates(cfg: &Cfg<'_>) -> Result<utils::ExitCode> {
         }
     }
 
-    check_rustup_update(cfg.process).await?;
+    let self_update_mode = cfg.get_self_update_mode()?;
+    // Priority: no-self-update feature > self_update_mode > no-self-update args.
+    // Check for update only if rustup does **not** have the no-self-update feature,
+    // and auto-self-update is configured to **enable**
+    // and has **no** no-self-update parameter.
+    let self_update = !self_update::NEVER_SELF_UPDATE
+        && self_update_mode == SelfUpdateMode::Enable
+        && !opts.no_self_update;
 
-    Ok(utils::ExitCode(0))
+    if self_update
+        && matches!(
+            check_rustup_update(cfg.process).await?,
+            RustupUpdateAvailable::True
+        )
+    {
+        update_available = true;
+    }
+
+    let exit_status = if update_available { 0 } else { 1 };
+    Ok(utils::ExitCode(exit_status))
 }
 
 async fn update(
