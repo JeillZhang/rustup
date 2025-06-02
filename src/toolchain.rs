@@ -585,25 +585,19 @@ impl<'a> Toolchain<'a> {
     /// NB: An assumption is made that custom toolchains always have a `rustlib/components` file
     pub fn installed_components(&self) -> anyhow::Result<Vec<Component>> {
         let prefix = InstallPrefix::from(self.path.clone());
-        let components = Components::open(prefix)?;
-        components.list()
+        Components::open(prefix)?.list()
     }
 
     /// Get the list of installed targets for any toolchain
     pub fn installed_targets(&self) -> anyhow::Result<Vec<TargetTriple>> {
-        let targets = self
+        Ok(self
             .installed_components()?
             .into_iter()
             .filter_map(|c| {
-                if c.name().starts_with("rust-std-") {
-                    Some(TargetTriple::new(
-                        c.name().trim_start_matches("rust-std-").to_string(),
-                    ))
-                } else {
-                    None
-                }
+                c.name()
+                    .strip_prefix("rust-std-")
+                    .map(|triple| TargetTriple::new(triple.to_string()))
             })
-            .collect();
-        Ok(targets)
+            .collect())
     }
 }
