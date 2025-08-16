@@ -7,7 +7,8 @@ mod tests;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use tokio_retry::{RetryIf, strategy::FixedInterval};
+use futures_util::stream::StreamExt;
+use tracing::info;
 
 use crate::dist::component::{
     Components, Package, TarGzPackage, TarXzPackage, TarZStdPackage, Transaction,
@@ -153,6 +154,7 @@ impl Manifestation {
         let mut things_to_install: Vec<(Component, CompressionKind, File)> = Vec::new();
         let mut things_downloaded: Vec<String> = Vec::new();
         let components = update.components_urls_and_hashes(new_manifest)?;
+        let components_len = components.len();
 
         const DEFAULT_MAX_RETRIES: usize = 3;
         let max_retries: usize = download_cfg
@@ -162,41 +164,40 @@ impl Manifestation {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_MAX_RETRIES);
 
-        for (component, format, url, hash) in components {
+        info!("downloading component(s)");
+        for (component, _, url, _) in components.clone() {
             (download_cfg.notify_handler)(Notification::DownloadingComponent(
                 &component.short_name(new_manifest),
                 &self.target_triple,
                 component.target.as_ref(),
+                &url,
             ));
-            let url = if altered {
-                url.replace(DEFAULT_DIST_SERVER, tmp_cx.dist_server.as_str())
-            } else {
-                url
-            };
+        }
 
-            let url_url = utils::parse_url(&url)?;
-
-            let downloaded_file = RetryIf::spawn(
-                FixedInterval::from_millis(0).take(max_retries),
-                || download_cfg.download(&url_url, &hash),
-                |e: &anyhow::Error| {
-                    // retry only known retriable cases
-                    match e.downcast_ref::<RustupError>() {
-                        Some(RustupError::BrokenPartialFile)
-                        | Some(RustupError::DownloadingFile { .. }) => {
-                            (download_cfg.notify_handler)(Notification::RetryingDownload(&url));
-                            true
-                        }
-                        _ => false,
-                    }
-                },
-            )
-            .await
-            .with_context(|| RustupError::ComponentDownloadFailed(component.name(new_manifest)))?;
-
-            things_downloaded.push(hash);
-
-            things_to_install.push((component, format, downloaded_file));
+        let component_stream =
+            tokio_stream::iter(components.into_iter()).map(|(component, format, url, hash)| {
+                self.download_component(
+                    component,
+                    format,
+                    url,
+                    hash,
+                    altered,
+                    tmp_cx,
+                    download_cfg,
+                    max_retries,
+                    new_manifest,
+                )
+            });
+        if components_len > 0 {
+            let results = component_stream
+                .buffered(components_len)
+                .collect::<Vec<_>>()
+                .await;
+            for result in results {
+                let (component, format, downloaded_file, hash) = result?;
+                things_downloaded.push(hash);
+                things_to_install.push((component, format, downloaded_file));
+            }
         }
 
         // Begin transaction
@@ -452,6 +453,7 @@ impl Manifestation {
             "rust",
             &self.target_triple,
             Some(&self.target_triple),
+            &url,
         ));
 
         use std::path::PathBuf;
@@ -530,6 +532,50 @@ impl Manifestation {
         }
 
         Ok(tx)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn download_component(
+        &self,
+        component: Component,
+        format: CompressionKind,
+        url: String,
+        hash: String,
+        altered: bool,
+        tmp_cx: &temp::Context,
+        download_cfg: &DownloadCfg<'_>,
+        max_retries: usize,
+        new_manifest: &Manifest,
+    ) -> Result<(Component, CompressionKind, File, String)> {
+        use tokio_retry::{RetryIf, strategy::FixedInterval};
+
+        let url = if altered {
+            url.replace(DEFAULT_DIST_SERVER, tmp_cx.dist_server.as_str())
+        } else {
+            url
+        };
+
+        let url_url = utils::parse_url(&url)?;
+
+        let downloaded_file = RetryIf::spawn(
+            FixedInterval::from_millis(0).take(max_retries),
+            || download_cfg.download(&url_url, &hash),
+            |e: &anyhow::Error| {
+                // retry only known retriable cases
+                match e.downcast_ref::<RustupError>() {
+                    Some(RustupError::BrokenPartialFile)
+                    | Some(RustupError::DownloadingFile { .. }) => {
+                        (download_cfg.notify_handler)(Notification::RetryingDownload(&url));
+                        true
+                    }
+                    _ => false,
+                }
+            },
+        )
+        .await
+        .with_context(|| RustupError::ComponentDownloadFailed(component.name(new_manifest)))?;
+
+        Ok((component, format, downloaded_file, hash))
     }
 }
 
