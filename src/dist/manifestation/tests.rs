@@ -417,16 +417,33 @@ struct TestContext {
 
 impl TestContext {
     fn new(edit: Option<&dyn Fn(&str, &mut MockChannel)>, comps: Compressions) -> Self {
+        Self::with_env(edit, comps, HashMap::new())
+    }
+
+    fn with_env(
+        edit: Option<&dyn Fn(&str, &mut MockChannel)>,
+        comps: Compressions,
+        env: HashMap<String, String>,
+    ) -> Self {
         let dist_tempdir = tempfile::Builder::new().prefix("rustup").tempdir().unwrap();
         let mock_dist_server = create_mock_dist_server(dist_tempdir.path(), edit);
         let url = Url::parse(&format!("file://{}", dist_tempdir.path().to_string_lossy())).unwrap();
 
-        let mut cx = Self::from_dist_server(mock_dist_server, url, comps);
+        let mut cx = Self::from_dist_server_with_env(mock_dist_server, url, comps, env);
         cx._tempdirs.push(dist_tempdir);
         cx
     }
 
     fn from_dist_server(server: MockDistServer, url: Url, comps: Compressions) -> Self {
+        Self::from_dist_server_with_env(server, url, comps, HashMap::new())
+    }
+
+    fn from_dist_server_with_env(
+        server: MockDistServer,
+        url: Url,
+        comps: Compressions,
+        env: HashMap<String, String>,
+    ) -> Self {
         server.write(
             &[MockManifestVersion::V2],
             comps.enable_xz(),
@@ -444,12 +461,7 @@ impl TestContext {
 
         let toolchain = ToolchainDesc::from_str("nightly-x86_64-apple-darwin").unwrap();
         let prefix = InstallPrefix::from(prefix_tempdir.path());
-        let tp = TestProcess::new(
-            env::current_dir().unwrap(),
-            &["rustup"],
-            HashMap::default(),
-            "",
-        );
+        let tp = TestProcess::new(env::current_dir().unwrap(), &["rustup"], env, "");
 
         Self {
             url,
@@ -1282,6 +1294,33 @@ fn remove_extensions_for_same_manifest_does_not_reinstall_other_components() {}
 #[tokio::test]
 async fn remove_extensions_does_not_remove_other_components() {
     let cx = TestContext::new(None, GZOnly);
+    let adds = vec![Component::new(
+        "rust-std".to_string(),
+        Some(TargetTriple::new("i686-apple-darwin")),
+        false,
+    )];
+
+    cx.update_from_dist(&adds, &[], false).await.unwrap();
+
+    let removes = vec![Component::new(
+        "rust-std".to_string(),
+        Some(TargetTriple::new("i686-apple-darwin")),
+        false,
+    )];
+
+    cx.update_from_dist(&[], &removes, false).await.unwrap();
+
+    assert!(utils::path_exists(cx.prefix.path().join("bin/rustc")));
+}
+
+#[tokio::test]
+async fn remove_extensions_does_not_hang_with_concurrent_downloads_override() {
+    let cx = TestContext::with_env(
+        None,
+        GZOnly,
+        [("RUSTUP_CONCURRENT_DOWNLOADS".to_owned(), "2".to_owned())].into(),
+    );
+
     let adds = vec![Component::new(
         "rust-std".to_string(),
         Some(TargetTriple::new("i686-apple-darwin")),

@@ -802,14 +802,20 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
     let mut update_available = false;
     let channels = cfg.list_channels()?;
     let channels_len = channels.len();
-    let num_channels = cfg.process.concurrent_downloads().unwrap_or(channels_len);
+
+    // Check updates for all channels unless `RUSTUP_CONCURRENT_DOWNLOADS` is set to 1,
+    // since the overhead of spawning many concurrent tasks here is acceptable.
+    let concurrent_downloads = match cfg.process.concurrent_downloads() {
+        Some(1) => 1,
+        Some(_) | None => channels_len,
+    };
 
     // Ensure that `.buffered()` is never called with 0 as this will cause a hang.
     // See: https://github.com/rust-lang/futures-rs/pull/1194#discussion_r209501774
-    if num_channels > 0 {
+    if channels_len > 0 {
         let multi_progress_bars =
             MultiProgress::with_draw_target(cfg.process.progress_draw_target());
-        let semaphore = Arc::new(Semaphore::new(num_channels));
+        let semaphore = Arc::new(Semaphore::new(concurrent_downloads));
         let channels = tokio_stream::iter(channels.into_iter()).map(|(name, distributable)| {
             let pb = multi_progress_bars.add(ProgressBar::new(1));
             pb.set_style(
@@ -878,7 +884,10 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                 .collect::<Vec<_>>()
                 .await
         } else {
-            channels.buffered(num_channels).collect::<Vec<_>>().await
+            channels
+                .buffered(concurrent_downloads)
+                .collect::<Vec<_>>()
+                .await
         };
 
         let t = cfg.process.stdout().terminal(cfg.process);

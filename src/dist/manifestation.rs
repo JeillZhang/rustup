@@ -157,10 +157,12 @@ impl Manifestation {
         let mut things_downloaded: Vec<String> = Vec::new();
         let components = update.components_urls_and_hashes(new_manifest)?;
         let components_len = components.len();
-        let num_channels = download_cfg
+
+        const DEFAULT_CONCURRENT_DOWNLOADS: usize = 2;
+        let concurrent_downloads = download_cfg
             .process
             .concurrent_downloads()
-            .unwrap_or(components_len);
+            .unwrap_or(DEFAULT_CONCURRENT_DOWNLOADS);
 
         const DEFAULT_MAX_RETRIES: usize = 3;
         let max_retries: usize = download_cfg
@@ -180,7 +182,7 @@ impl Manifestation {
             ));
         }
 
-        let semaphore = Arc::new(Semaphore::new(num_channels));
+        let semaphore = Arc::new(Semaphore::new(concurrent_downloads));
         let component_stream =
             tokio_stream::iter(components.into_iter()).map(|(component, format, url, hash)| {
                 let sem = semaphore.clone();
@@ -200,7 +202,7 @@ impl Manifestation {
                     .await
                 }
             });
-        if num_channels > 0 {
+        if components_len > 0 {
             let results = component_stream
                 .buffered(components_len)
                 .collect::<Vec<_>>()
