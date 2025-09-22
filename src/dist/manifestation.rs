@@ -13,7 +13,7 @@ use tokio::sync::Semaphore;
 use tracing::info;
 
 use crate::dist::component::{
-    Components, Package, TarGzPackage, TarXzPackage, TarZStdPackage, Transaction,
+    Components, Package, PackageContext, TarGzPackage, TarXzPackage, TarZStdPackage, Transaction,
 };
 use crate::dist::config::Config;
 use crate::dist::download::{DownloadCfg, File};
@@ -267,39 +267,19 @@ impl Manifestation {
             let notification_converter = |notification: crate::utils::Notification<'_>| {
                 (download_cfg.notify_handler)(notification.into());
             };
-            let gz;
-            let xz;
-            let zst;
+
+            let cx = PackageContext {
+                tmp_cx,
+                notify_handler: Some(&notification_converter),
+                process: download_cfg.process,
+            };
+
             let reader =
                 utils::FileReaderWithProgress::new_file(&installer_file, &notification_converter)?;
-            let package: &dyn Package = match format {
-                CompressionKind::GZip => {
-                    gz = TarGzPackage::new(
-                        reader,
-                        tmp_cx,
-                        Some(&notification_converter),
-                        download_cfg.process,
-                    )?;
-                    &gz
-                }
-                CompressionKind::XZ => {
-                    xz = TarXzPackage::new(
-                        reader,
-                        tmp_cx,
-                        Some(&notification_converter),
-                        download_cfg.process,
-                    )?;
-                    &xz
-                }
-                CompressionKind::ZStd => {
-                    zst = TarZStdPackage::new(
-                        reader,
-                        tmp_cx,
-                        Some(&notification_converter),
-                        download_cfg.process,
-                    )?;
-                    &zst
-                }
+            let package = match format {
+                CompressionKind::GZip => &TarGzPackage::new(reader, &cx)? as &dyn Package,
+                CompressionKind::XZ => &TarXzPackage::new(reader, &cx)?,
+                CompressionKind::ZStd => &TarZStdPackage::new(reader, &cx)?,
             };
 
             // If the package doesn't contain the component that the
@@ -455,7 +435,7 @@ impl Manifestation {
         if url.is_none() {
             return Err(anyhow!(
                 "binary package was not provided for '{}'",
-                self.target_triple.to_string()
+                self.target_triple,
             ));
         }
         // Only replace once. The cost is inexpensive.
@@ -511,9 +491,13 @@ impl Manifestation {
         };
         let reader =
             utils::FileReaderWithProgress::new_file(&installer_file, &notification_converter)?;
-        let package: &dyn Package =
-            &TarGzPackage::new(reader, tmp_cx, Some(&notification_converter), process)?;
+        let cx = PackageContext {
+            tmp_cx,
+            notify_handler: Some(&notification_converter),
+            process,
+        };
 
+        let package: &dyn Package = &TarGzPackage::new(reader, &cx)?;
         for component in package.components() {
             tx = package.install(&self.installation, &component, None, tx)?;
         }
