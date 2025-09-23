@@ -16,6 +16,7 @@ use tracing::{info, warn};
 use crate::{
     config::{Cfg, dist_root_server},
     errors::RustupError,
+    notifications::Notification,
     process::Process,
     toolchain::ToolchainName,
     utils,
@@ -32,9 +33,6 @@ use manifest::{Component, Manifest as ManifestV2};
 
 pub mod manifestation;
 use manifestation::{Changes, Manifestation, UpdateStatus};
-
-pub(crate) mod notifications;
-pub use notifications::Notification;
 
 pub mod prefix;
 use prefix::InstallPrefix;

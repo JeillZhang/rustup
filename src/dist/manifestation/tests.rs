@@ -16,7 +16,7 @@ use url::Url;
 
 use crate::{
     dist::{
-        DEFAULT_DIST_SERVER, Notification, Profile, TargetTriple, ToolchainDesc,
+        DEFAULT_DIST_SERVER, Profile, TargetTriple, ToolchainDesc,
         download::DownloadCfg,
         manifest::{Component, Manifest},
         manifestation::{Changes, Manifestation, UpdateStatus},
@@ -25,6 +25,7 @@ use crate::{
     },
     download::download_file,
     errors::RustupError,
+    notifications::Notification,
     process::TestProcess,
     test::{
         dist::*,

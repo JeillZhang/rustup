@@ -16,13 +16,13 @@ use tracing_subscriber::{EnvFilter, Registry, reload::Handle};
 use crate::{
     cli::download_tracker::DownloadTracker,
     config::Cfg,
-    dist::{TargetTriple, ToolchainDesc, notifications as dist_notifications},
+    dist::{TargetTriple, ToolchainDesc},
     errors::RustupError,
     install::UpdateStatus,
     notifications::Notification,
     process::{Process, terminalsource},
     toolchain::{LocalToolchainName, Toolchain, ToolchainName},
-    utils::{self, notifications as util_notifications, notify::NotificationLevel},
+    utils::{self, notify::NotificationLevel},
 };
 
 pub(crate) const WARN_COMPLETE_PROFILE: &str = "downloading with complete profile isn't recommended unless you are a developer of the rust language";
@@ -139,10 +139,7 @@ impl Notifier {
             return;
         }
 
-        if let Notification::Install(dist_notifications::Notification::Utils(
-            util_notifications::Notification::SetDefaultBufferSize(_),
-        )) = &n
-        {
+        if let Notification::SetDefaultBufferSize(_) = &n {
             if *self.ram_notice_shown.borrow() {
                 return;
             } else {
