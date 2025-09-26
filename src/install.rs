@@ -56,7 +56,7 @@ impl InstallMethod<'_> {
         }
 
         nh(Notification::ToolchainDirectory(&self.dest_path()));
-        let updated = self.run(&self.dest_path(), &|n| nh(n)).await?;
+        let updated = self.run(&self.dest_path()).await?;
 
         let status = match updated {
             false => {
@@ -84,24 +84,24 @@ impl InstallMethod<'_> {
         }
     }
 
-    async fn run(&self, path: &Path, notify_handler: &dyn Fn(Notification<'_>)) -> Result<bool> {
+    async fn run(&self, path: &Path) -> Result<bool> {
         if path.exists() {
             // Don't uninstall first for Dist method
             match self {
                 InstallMethod::Dist { .. } => {}
                 _ => {
-                    uninstall(path, notify_handler)?;
+                    uninstall(path)?;
                 }
             }
         }
 
         match self {
             InstallMethod::Copy { src, .. } => {
-                utils::copy_dir(src, path, notify_handler)?;
+                utils::copy_dir(src, path)?;
                 Ok(true)
             }
             InstallMethod::Link { src, .. } => {
-                utils::symlink_dir(src, path, notify_handler)?;
+                utils::symlink_dir(src, path)?;
                 Ok(true)
             }
             InstallMethod::Dist(opts) => {
@@ -156,6 +156,6 @@ impl InstallMethod<'_> {
     }
 }
 
-pub(crate) fn uninstall(path: &Path, notify_handler: &dyn Fn(Notification<'_>)) -> Result<()> {
-    utils::remove_dir("install", path, notify_handler)
+pub(crate) fn uninstall(path: &Path) -> Result<()> {
+    utils::remove_dir("install", path)
 }

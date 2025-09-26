@@ -1,5 +1,4 @@
 use std::fmt::{self, Display};
-use std::io;
 use std::path::{Path, PathBuf};
 
 use url::Url;
@@ -11,17 +10,13 @@ use crate::utils::units;
 use crate::{dist::ToolchainDesc, toolchain::ToolchainName, utils::notify::NotificationLevel};
 
 #[derive(Debug)]
-pub enum Notification<'a> {
-    Extracting(&'a Path, &'a Path),
+pub(crate) enum Notification<'a> {
     ComponentAlreadyInstalled(&'a str),
     CantReadUpdateHash(&'a Path),
     NoUpdateHash(&'a Path),
     ChecksumValid(&'a str),
     FileAlreadyDownloaded,
     CachedFileChecksumFailed,
-    RollingBack,
-    ExtensionNotInstalled(&'a str),
-    NonFatalError(&'a anyhow::Error),
     MissingInstalledComponent(&'a str),
     /// The URL of the download is passed as the last argument, to allow us to track concurrent downloads.
     DownloadingComponent(&'a str, &'a TargetTriple, Option<&'a TargetTriple>, &'a str),
@@ -33,15 +28,9 @@ pub enum Notification<'a> {
     DownloadingLegacyManifest,
     SkippingNightlyMissingComponent(&'a ToolchainDesc, &'a Manifest, &'a [Component]),
     ForcingUnavailableComponent(&'a str),
-    ComponentUnavailable(&'a str, Option<&'a TargetTriple>),
     StrayHash(&'a Path),
-    SignatureInvalid(&'a str),
     RetryingDownload(&'a str),
-    CreatingDirectory(&'a str, &'a Path),
-    LinkingDirectory(&'a Path, &'a Path),
-    CopyingDirectory(&'a Path, &'a Path),
-    RemovingDirectory(&'a str, &'a Path),
-    DownloadingFile(&'a Url, &'a Path),
+    DownloadingFile(&'a Url),
     /// Received the Content-Length of the to-be downloaded data with
     /// the respective URL of the download (for tracking concurrent downloads).
     DownloadContentLengthReceived(u64, Option<&'a str>),
@@ -51,25 +40,15 @@ pub enum Notification<'a> {
     DownloadFinished(Option<&'a str>),
     /// Download has failed.
     DownloadFailed(&'a str),
-    NoCanonicalPath(&'a Path),
     ResumingPartialDownload,
     /// This would make more sense as a crate::notifications::Notification
     /// member, but the notification callback is already narrowed to
     /// utils::notifications by the time tar unpacking is called.
     SetDefaultBufferSize(usize),
     Error(String),
+    #[cfg(feature = "curl-backend")]
     UsingCurl,
     UsingReqwest,
-    /// Renaming encountered a file in use error and is retrying.
-    /// The InUse aspect is a heuristic - the OS specifies
-    /// Permission denied, but as we work in users home dirs and
-    /// running programs like virus scanner are known to cause this
-    /// the heuristic is quite good.
-    RenameInUse(&'a Path, &'a Path),
-    CreatingRoot(&'a Path),
-    CreatingFile(&'a Path),
-    FileDeletion(&'a Path, io::Result<()>),
-    DirectoryDeletion(&'a Path, io::Result<()>),
     SetAutoInstall(&'a str),
     SetDefaultToolchain(Option<&'a ToolchainName>),
     SetOverrideToolchain(&'a Path, &'a str),
@@ -103,47 +82,31 @@ impl Notification<'_> {
             | NoUpdateHash(_)
             | FileAlreadyDownloaded
             | DownloadingLegacyManifest => NotificationLevel::Debug,
-            Extracting(_, _)
-            | DownloadingComponent(_, _, _, _)
+            DownloadingComponent(_, _, _, _)
             | InstallingComponent(_, _, _)
             | RemovingComponent(_, _, _)
             | RemovingOldComponent(_, _, _)
             | ComponentAlreadyInstalled(_)
-            | RollingBack
             | DownloadingManifest(_)
             | SkippingNightlyMissingComponent(_, _, _)
             | RetryingDownload(_)
             | DownloadedManifest(_, _) => NotificationLevel::Info,
             CantReadUpdateHash(_)
-            | ExtensionNotInstalled(_)
             | MissingInstalledComponent(_)
             | CachedFileChecksumFailed
-            | ComponentUnavailable(_, _)
             | ForcingUnavailableComponent(_)
             | StrayHash(_) => NotificationLevel::Warn,
-            NonFatalError(_) => NotificationLevel::Error,
-            SignatureInvalid(_) => NotificationLevel::Warn,
             SetDefaultBufferSize(_) => NotificationLevel::Trace,
-            CreatingDirectory(_, _)
-            | RemovingDirectory(_, _)
-            | LinkingDirectory(_, _)
-            | CopyingDirectory(_, _)
-            | DownloadingFile(_, _)
+            DownloadingFile(_)
             | DownloadContentLengthReceived(_, _)
             | DownloadDataReceived(_, _)
             | DownloadFinished(_)
             | DownloadFailed(_)
             | ResumingPartialDownload
-            | UsingCurl
             | UsingReqwest => NotificationLevel::Debug,
-            RenameInUse(_, _) => NotificationLevel::Info,
-            NoCanonicalPath(_) => NotificationLevel::Warn,
+            #[cfg(feature = "curl-backend")]
+            UsingCurl => NotificationLevel::Debug,
             Error(_) => NotificationLevel::Error,
-            CreatingRoot(_) | CreatingFile(_) => NotificationLevel::Debug,
-            FileDeletion(_, result) | DirectoryDeletion(_, result) => match result {
-                Ok(_) => NotificationLevel::Debug,
-                Err(_) => NotificationLevel::Warn,
-            },
             ToolchainDirectory(_)
             | LookingForToolchain(_)
             | InstallingToolchain(_)
@@ -170,7 +133,6 @@ impl Display for Notification<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
         use self::Notification::*;
         match self {
-            Extracting(_, _) => write!(f, "extracting..."),
             ComponentAlreadyInstalled(c) => write!(f, "component {c} is up to date"),
             CantReadUpdateHash(path) => write!(
                 f,
@@ -178,12 +140,9 @@ impl Display for Notification<'_> {
                 path.display()
             ),
             NoUpdateHash(path) => write!(f, "no update hash at: '{}'", path.display()),
-            ChecksumValid(_) => write!(f, "checksum passed"),
+            ChecksumValid(url) => write!(f, "checksum passed for {url}"),
             FileAlreadyDownloaded => write!(f, "reusing previously downloaded file"),
             CachedFileChecksumFailed => write!(f, "bad checksum for cached download"),
-            RollingBack => write!(f, "rolling back changes"),
-            ExtensionNotInstalled(c) => write!(f, "extension '{c}' was not installed"),
-            NonFatalError(e) => write!(f, "{e}"),
             MissingInstalledComponent(c) => {
                 write!(f, "during uninstall component {c} was not found")
             }
@@ -228,13 +187,6 @@ impl Display for Notification<'_> {
                 write!(f, "latest update on {date}, no rust version")
             }
             DownloadingLegacyManifest => write!(f, "manifest not found. trying legacy manifest"),
-            ComponentUnavailable(pkg, toolchain) => {
-                if let Some(tc) = toolchain {
-                    write!(f, "component '{pkg}' is not available on target '{tc}'")
-                } else {
-                    write!(f, "component '{pkg}' is not available")
-                }
-            }
             StrayHash(path) => write!(
                 f,
                 "removing stray hash found at '{}' in order to continue",
@@ -259,53 +211,22 @@ impl Display for Notification<'_> {
             ForcingUnavailableComponent(component) => {
                 write!(f, "Force-skipping unavailable component '{component}'")
             }
-            SignatureInvalid(url) => write!(f, "Signature verification failed for '{url}'"),
             RetryingDownload(url) => write!(f, "retrying download for '{url}'"),
-            CreatingDirectory(name, path) => {
-                write!(f, "creating {} directory: '{}'", name, path.display())
-            }
             Error(e) => write!(f, "error: '{e}'"),
-            LinkingDirectory(_, dest) => write!(f, "linking directory from: '{}'", dest.display()),
-            CopyingDirectory(src, _) => write!(f, "copying directory from: '{}'", src.display()),
-            RemovingDirectory(name, path) => {
-                write!(f, "removing {} directory: '{}'", name, path.display())
-            }
-            RenameInUse(src, dest) => write!(
-                f,
-                "retrying renaming '{}' to '{}'",
-                src.display(),
-                dest.display()
-            ),
             SetDefaultBufferSize(size) => write!(
                 f,
                 "using up to {} of RAM to unpack components",
                 units::Size::new(*size)
             ),
-            DownloadingFile(url, _) => write!(f, "downloading file from: '{url}'"),
+            DownloadingFile(url) => write!(f, "downloading file from: '{url}'"),
             DownloadContentLengthReceived(len, _) => write!(f, "download size is: '{len}'"),
             DownloadDataReceived(data, _) => write!(f, "received some data of size {}", data.len()),
             DownloadFinished(_) => write!(f, "download finished"),
             DownloadFailed(_) => write!(f, "download failed"),
-            NoCanonicalPath(path) => write!(f, "could not canonicalize path: '{}'", path.display()),
             ResumingPartialDownload => write!(f, "resuming partial download"),
+            #[cfg(feature = "curl-backend")]
             UsingCurl => write!(f, "downloading with curl"),
             UsingReqwest => write!(f, "downloading with reqwest"),
-            CreatingRoot(path) => write!(f, "creating temp root: {}", path.display()),
-            CreatingFile(path) => write!(f, "creating temp file: {}", path.display()),
-            FileDeletion(path, result) => {
-                if result.is_ok() {
-                    write!(f, "deleted temp file: {}", path.display())
-                } else {
-                    write!(f, "could not delete temp file: {}", path.display())
-                }
-            }
-            DirectoryDeletion(path, result) => {
-                if result.is_ok() {
-                    write!(f, "deleted temp directory: {}", path.display())
-                } else {
-                    write!(f, "could not delete temp directory: {}", path.display())
-                }
-            }
             SetAutoInstall(auto) => write!(f, "auto install set to '{auto}'"),
             SetDefaultToolchain(None) => write!(f, "default toolchain unset"),
             SetDefaultToolchain(Some(name)) => write!(f, "default toolchain set to '{name}'"),

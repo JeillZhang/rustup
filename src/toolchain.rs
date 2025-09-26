@@ -97,11 +97,11 @@ impl<'a> Toolchain<'a> {
             }
             ActiveReason::OverrideDB(path) => format!(
                 "the directory override for '{}' specifies an uninstalled toolchain",
-                utils::canonicalize_path(path, cfg.notify_handler.as_ref()).display(),
+                utils::canonicalize_path(path).display(),
             ),
             ActiveReason::ToolchainFile(path) => format!(
                 "the toolchain file at '{}' specifies an uninstalled toolchain",
-                utils::canonicalize_path(path, cfg.notify_handler.as_ref()).display(),
+                utils::canonicalize_path(path).display(),
             ),
             ActiveReason::Default => {
                 "the default toolchain does not describe an installed toolchain".to_string()
@@ -554,9 +554,7 @@ impl<'a> Toolchain<'a> {
                         InstalledPath::File { name, path } => {
                             utils::ensure_file_removed(name, &path)?
                         }
-                        InstalledPath::Dir { path } => {
-                            install::uninstall(path, &|n| (cfg.notify_handler)(n))?
-                        }
+                        InstalledPath::Dir { path } => install::uninstall(path)?,
                     }
                 }
                 true

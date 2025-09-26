@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use thiserror::Error as ThisError;
 use tokio_stream::StreamExt;
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::dist::AutoInstallMode;
 use crate::{
@@ -247,7 +247,7 @@ impl<'a> Cfg<'a> {
         // Set up the rustup home directory
         let rustup_dir = process.rustup_home()?;
 
-        utils::ensure_dir_exists("home", &rustup_dir, notify_handler.as_ref())?;
+        utils::ensure_dir_exists("home", &rustup_dir)?;
 
         let settings_file = SettingsFile::new(rustup_dir.join("settings.toml"));
         settings_file.with(|s| {
@@ -290,13 +290,7 @@ impl<'a> Cfg<'a> {
         };
 
         let dist_root_server = dist_root_server(process)?;
-
-        let notify_clone = notify_handler.clone();
-        let tmp_cx = temp::Context::new(
-            rustup_dir.join("tmp"),
-            dist_root_server.as_str(),
-            Box::new(move |n| (notify_clone)(n)),
-        );
+        let tmp_cx = temp::Context::new(rustup_dir.join("tmp"), dist_root_server.as_str());
         let dist_root = dist_root_server + "/dist";
 
         let cfg = Self {
@@ -411,9 +405,7 @@ impl<'a> Cfg<'a> {
     }
 
     pub(crate) fn ensure_toolchains_dir(&self) -> Result<(), anyhow::Error> {
-        utils::ensure_dir_exists("toolchains", &self.toolchains_dir, &|n| {
-            (self.notify_handler)(n)
-        })?;
+        utils::ensure_dir_exists("toolchains", &self.toolchains_dir)?;
         Ok(())
     }
 
@@ -437,11 +429,7 @@ impl<'a> Cfg<'a> {
         create_parent: bool,
     ) -> Result<PathBuf> {
         if create_parent {
-            utils::ensure_dir_exists(
-                "update-hash",
-                &self.update_hash_dir,
-                self.notify_handler.as_ref(),
-            )?;
+            utils::ensure_dir_exists("update-hash", &self.update_hash_dir)?;
         }
 
         Ok(self.update_hash_dir.join(toolchain.to_string()))
@@ -468,7 +456,7 @@ impl<'a> Cfg<'a> {
                 let dirs = utils::read_dir("toolchains", &self.toolchains_dir)?;
                 for dir in dirs {
                     let dir = dir.context("IO Error reading toolchains")?;
-                    utils::remove_dir("toolchain", &dir.path(), self.notify_handler.as_ref())?;
+                    utils::remove_dir("toolchain", &dir.path())?;
                 }
 
                 // Also delete the update hashes
@@ -582,7 +570,7 @@ impl<'a> Cfg<'a> {
 
         while let Some(d) = dir {
             // First check the override database
-            if let Some(name) = settings.dir_override(d, notify) {
+            if let Some(name) = settings.dir_override(d) {
                 let reason = ActiveReason::OverrideDB(d.to_owned());
                 // Note that `rustup override set` fully resolves it's input
                 // before writing to settings.toml, so resolving here may not
@@ -945,7 +933,7 @@ impl<'a> Cfg<'a> {
                 .update_extra(&[], &[], profile, force_update, false)
                 .await;
             if let Err(e) = &st {
-                (self.notify_handler)(Notification::NonFatalError(e));
+                error!("{e}");
             }
             (desc, st)
         });

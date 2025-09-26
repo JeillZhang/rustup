@@ -21,7 +21,7 @@ pub struct DownloadCfg<'a> {
     pub dist_root: &'a str,
     pub tmp_cx: &'a temp::Context,
     pub download_dir: &'a PathBuf,
-    pub notify_handler: &'a dyn Fn(Notification<'_>),
+    pub(crate) notify_handler: &'a dyn Fn(Notification<'_>),
     pub process: &'a Process,
 }
 
@@ -43,11 +43,7 @@ impl<'a> DownloadCfg<'a> {
     /// target file already exists, then the hash is checked and it is returned
     /// immediately without re-downloading.
     pub(crate) async fn download(&self, url: &Url, hash: &str) -> Result<File> {
-        utils::ensure_dir_exists(
-            "Download Directory",
-            self.download_dir,
-            &self.notify_handler,
-        )?;
+        utils::ensure_dir_exists("Download Directory", self.download_dir)?;
         let target_file = self.download_dir.join(Path::new(hash));
 
         if target_file.exists() {
@@ -111,13 +107,7 @@ impl<'a> DownloadCfg<'a> {
         } else {
             (self.notify_handler)(Notification::ChecksumValid(url.as_ref()));
 
-            utils::rename(
-                "downloaded",
-                &partial_file_path,
-                &target_file,
-                self.notify_handler,
-                self.process,
-            )?;
+            utils::rename("downloaded", &partial_file_path, &target_file, self.process)?;
             Ok(File { path: target_file })
         }
     }
@@ -158,7 +148,7 @@ impl<'a> DownloadCfg<'a> {
         url_str: &str,
         update_hash: Option<&Path>,
         ext: &str,
-    ) -> Result<Option<(temp::File<'a>, String)>> {
+    ) -> Result<Option<(temp::File, String)>> {
         let hash = self.download_hash(url_str).await?;
         let partial_hash: String = hash.chars().take(UPDATE_HASH_LEN).collect();
 

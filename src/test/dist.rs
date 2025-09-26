@@ -22,7 +22,6 @@ use crate::dist::{
     prefix::InstallPrefix,
     temp,
 };
-use crate::notifications::Notification;
 use crate::process::TestProcess;
 
 pub struct DistContext {
@@ -49,11 +48,7 @@ impl DistContext {
             pkg_dir,
             inst_dir,
             prefix,
-            cx: temp::Context::new(
-                tmp_dir.path().to_owned(),
-                DEFAULT_DIST_SERVER,
-                Box::new(|_| ()),
-            ),
+            cx: temp::Context::new(tmp_dir.path().to_owned(), DEFAULT_DIST_SERVER),
             tp: TestProcess::default(),
             _tmp_dir: tmp_dir,
         })
@@ -67,12 +62,7 @@ impl DistContext {
     }
 
     pub fn transaction(&self) -> Transaction<'_> {
-        Transaction::new(
-            self.prefix.clone(),
-            &self.cx,
-            &|_: Notification<'_>| (),
-            &self.tp.process,
-        )
+        Transaction::new(self.prefix.clone(), &self.cx, &self.tp.process)
     }
 }
 
